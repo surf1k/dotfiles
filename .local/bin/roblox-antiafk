@@ -233,9 +233,9 @@ def uinput_tap_key(ui, key_code, press_time=0.14):
     ui.write(e.EV_KEY, key_code, 0)
     ui.syn()
 
-def perform_antiafk_routine(x11_sender, x11_win, ui=None, is_focused=False, jump=True, a_duration=None, walk_back=False):
+def perform_antiafk_routine(x11_sender, x11_win, ui=None, is_focused=False, jump=True, a_duration=None, walk_back=True):
     """
-    Выполняет: 1 раз Пробел (Space) + зажатие 'A' на 300-400 мс.
+    Выполняет: 1 раз Пробел (Space) + зажатие 'A' на 300-400 мс + возврат 'D' на то же время.
     Отправляет аппаратно через XTest в XWayland без переключения экранов и рабочих столов Niri.
     """
     if a_duration is None:
@@ -336,8 +336,14 @@ def main():
         '--walk-back', '--return', '-ret',
         dest='walk_back',
         action='store_true',
-        default=False,
-        help="После нажатия 'A' нажать 'D' на то же время, чтобы вернуть персонажа на исходную позицию (полезно на узких беговых дорожках)"
+        default=True,
+        help="После нажатия 'A' нажать 'D' на то же время, чтобы вернуть персонажа на исходную позицию (включено по умолчанию)"
+    )
+    parser.add_argument(
+        '--no-walk-back', '--no-return',
+        dest='walk_back',
+        action='store_false',
+        help="Отключить шаг возврата 'D'"
     )
     parser.add_argument(
         '-t', '--test', '-test',
