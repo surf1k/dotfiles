@@ -5,11 +5,15 @@ TARGET_LINK="$HOME/.config/wallpaper.jpg"
 
 OPT="$1"
 case "$OPT" in
-    1|"sanctuary")
+    1|"sylphiette"|"sylphy")
+        IMG="$WALL_DIR/sylphiette-clockwork-forest.png"
+        NAME="Сильфиетта с часовой катаной в стимпанк-лесу"
+        ;;
+    2|"sanctuary")
         IMG="$WALL_DIR/4k-emerald-clockwork-sanctuary-art.png"
         NAME="5K Стимпанк: Часовое Святилище в Каньоне (5504x3072)"
         ;;
-    2|"forest")
+    3|"forest")
         IMG="$WALL_DIR/4k-emerald-steampunk-forest-art.png"
         NAME="5K Стимпанк: Древний Лес Шестерёнок и Труб (5504x3072)"
         ;;
@@ -21,8 +25,8 @@ case "$OPT" in
             IMG="$WALL_DIR/$OPT"
             NAME="$OPT"
         else
-            IMG="$WALL_DIR/4k-emerald-clockwork-sanctuary-art.png"
-            NAME="5K Стимпанк: Часовое Святилище в Каньоне (5504x3072)"
+            IMG="$WALL_DIR/sylphiette-clockwork-forest.png"
+            NAME="Сильфиетта с часовой катаной в стимпанк-лесу"
         fi
         ;;
 esac
@@ -30,7 +34,7 @@ esac
 ln -sf "$IMG" "$TARGET_LINK"
 
 pkill -x swaybg 2>/dev/null || true
-nohup /home/ym1co/.local/bin/swaybg-wrapper >/dev/null 2>&1 &
+setsid -f /home/ym1co/.local/bin/swaybg-wrapper </dev/null >/dev/null 2>&1
 
 notify-send -i "$IMG" "🌲 Стимпанк Арт 5K применен" "$NAME" 2>/dev/null || true
 echo "Установлен 5K Изумрудный Стимпанк Арт: $NAME"
