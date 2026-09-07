@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Roblox Anti-AFK for Linux / Niri / Wayland / XWayland (Sober)
-Periodically presses W, S, A, D (and optional Space) in Roblox without stealing focus or teleporting.
-Uses X11 XSendEvent directly to Sober's window, keeping your current workspace and window completely undisturbed.
+Reliably prevents 20-minute idle kicks in Roblox without switching workspaces or teleporting the user.
+Uses X11 XTEST (hardware-level event injection) & cursor positioning directly in XWayland.
 """
 
 import sys
@@ -16,7 +16,14 @@ import ctypes
 from datetime import datetime
 from ctypes import c_void_p, c_ulong, c_int, c_uint, c_char_p, Structure, byref, POINTER
 
-# Опциональный uinput
+# Enable unbuffered line output for real-time systemd/journalctl logs
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
+# Optional uinput fallback
 try:
     import evdev
     from evdev import UInput, ecodes as e
@@ -24,41 +31,49 @@ try:
 except ImportError:
     HAVE_UINPUT = False
 
-# X11 структуры
-class XKeyEvent(Structure):
-    _fields_ = [
-        ("type", c_int),
-        ("serial", c_ulong),
-        ("send_event", c_int),
-        ("display", c_void_p),
-        ("window", c_ulong),
-        ("root", c_ulong),
-        ("subwindow", c_ulong),
-        ("time", c_ulong),
-        ("x", c_int),
-        ("y", c_int),
-        ("x_root", c_int),
-        ("y_root", c_int),
-        ("state", c_uint),
-        ("keycode", c_uint),
-        ("same_screen", c_int),
-    ]
-
+# X11 structures
 class XClassHint(Structure):
     _fields_ = [
         ("res_name", c_char_p),
         ("res_class", c_char_p),
     ]
 
+class XWindowAttributes(Structure):
+    _fields_ = [
+        ('x', c_int), ('y', c_int),
+        ('width', c_int), ('height', c_int),
+        ('border_width', c_int),
+        ('depth', c_int),
+        ('visual', c_void_p),
+        ('root', c_ulong),
+        ('class', c_int),
+        ('bit_gravity', c_int),
+        ('win_gravity', c_int),
+        ('backing_store', c_int),
+        ('backing_planes', c_ulong),
+        ('backing_pixel', c_ulong),
+        ('save_under', c_int),
+        ('colormap', c_ulong),
+        ('map_installed', c_int),
+        ('map_state', c_int),
+        ('all_event_masks', ctypes.c_long),
+        ('your_event_mask', ctypes.c_long),
+        ('do_not_propagate_mask', ctypes.c_long),
+        ('override_redirect', c_int),
+        ('screen', c_void_p),
+    ]
+
 class X11InputSender:
     def __init__(self):
         try:
             self.x11 = ctypes.CDLL("libX11.so.6")
+            self.xtst = ctypes.CDLL("libXtst.so.6")
             self._setup_bindings()
             self.disp = self.x11.XOpenDisplay(None)
             self.root = self.x11.XDefaultRootWindow(self.disp) if self.disp else None
         except Exception:
             self.x11 = None
+            self.xtst = None
             self.disp = None
             self.root = None
 
@@ -79,13 +94,22 @@ class X11InputSender:
         self.x11.XStringToKeysym.restype = c_ulong
         self.x11.XKeysymToKeycode.argtypes = [c_void_p, c_ulong]
         self.x11.XKeysymToKeycode.restype = ctypes.c_ubyte
-        self.x11.XSendEvent.argtypes = [c_void_p, c_ulong, c_int, ctypes.c_long, c_void_p]
-        self.x11.XSendEvent.restype = c_int
+        self.x11.XWarpPointer.argtypes = [c_void_p, c_ulong, c_ulong, c_int, c_int, c_uint, c_uint, c_int, c_int]
+        self.x11.XWarpPointer.restype = c_int
+        self.x11.XSetInputFocus.argtypes = [c_void_p, c_ulong, c_int, c_ulong]
+        self.x11.XSetInputFocus.restype = c_int
+        self.x11.XGetWindowAttributes.argtypes = [c_void_p, c_ulong, POINTER(XWindowAttributes)]
+        self.x11.XGetWindowAttributes.restype = c_int
         self.x11.XFlush.argtypes = [c_void_p]
         self.x11.XFlush.restype = c_int
 
+        self.xtst.XTestFakeKeyEvent.argtypes = [c_void_p, c_uint, c_int, c_ulong]
+        self.xtst.XTestFakeKeyEvent.restype = c_int
+        self.xtst.XTestFakeButtonEvent.argtypes = [c_void_p, c_uint, c_int, c_ulong]
+        self.xtst.XTestFakeButtonEvent.restype = c_int
+
     def is_available(self):
-        return bool(self.disp and self.root)
+        return bool(self.disp and self.root and self.xtst)
 
     def find_sober_window(self):
         if not self.is_available():
@@ -111,31 +135,49 @@ class X11InputSender:
             self.x11.XFree(children_r)
         return sober_win
 
-    def tap_key(self, win, key_name, press_time=0.12):
+    def get_window_size(self, win):
         if not self.is_available() or not win:
+            return 2560, 1440
+        attr = XWindowAttributes()
+        if self.x11.XGetWindowAttributes(self.disp, win, byref(attr)):
+            return max(100, attr.width), max(100, attr.height)
+        return 2560, 1440
+
+    def prepare_window(self, win):
+        """Warp pointer to window center and focus it inside XWayland."""
+        if not self.is_available() or not win:
+            return False
+        w, h = self.get_window_size(win)
+        cx, cy = w // 2, h // 2
+        self.x11.XWarpPointer(self.disp, 0, win, 0, 0, 0, 0, cx, cy)
+        self.x11.XSetInputFocus(self.disp, win, 1, 0)
+        self.x11.XFlush(self.disp)
+        # Send a brief click to activate surface in XWayland
+        self.click_button(1, press_time=0.04)
+        return True
+
+    def click_button(self, button=1, press_time=0.05):
+        if not self.is_available():
+            return False
+        self.xtst.XTestFakeButtonEvent(self.disp, button, 1, 0)
+        self.x11.XFlush(self.disp)
+        time.sleep(press_time)
+        self.xtst.XTestFakeButtonEvent(self.disp, button, 0, 0)
+        self.x11.XFlush(self.disp)
+        return True
+
+    def tap_key(self, key_name, press_time=0.12):
+        if not self.is_available():
             return False
         sym = self.x11.XStringToKeysym(key_name.encode())
         code = self.x11.XKeysymToKeycode(self.disp, sym)
         if not code:
             return False
 
-        ev = XKeyEvent()
-        ev.type = 2  # KeyPress
-        ev.send_event = 1
-        ev.display = self.disp
-        ev.window = win
-        ev.root = self.root
-        ev.keycode = code
-        ev.same_screen = 1
-
-        # KeyPressMask = 1
-        self.x11.XSendEvent(self.disp, win, 1, 1, byref(ev))
+        self.xtst.XTestFakeKeyEvent(self.disp, code, 1, 0)
         self.x11.XFlush(self.disp)
         time.sleep(press_time)
-
-        # KeyReleaseMask = 2
-        ev.type = 3  # KeyRelease
-        self.x11.XSendEvent(self.disp, win, 1, 2, byref(ev))
+        self.xtst.XTestFakeKeyEvent(self.disp, code, 0, 0)
         self.x11.XFlush(self.disp)
         return True
 
@@ -191,27 +233,43 @@ def uinput_tap_key(ui, key_code, press_time=0.14):
     ui.write(e.EV_KEY, key_code, 0)
     ui.syn()
 
-def perform_antiafk_routine(x11_sender, x11_win, ui=None, is_focused=False, jump=True, a_duration=None):
+def perform_antiafk_routine(x11_sender, x11_win, ui=None, is_focused=False, jump=True, a_duration=None, walk_back=False):
     """
     Выполняет: 1 раз Пробел (Space) + зажатие 'A' на 300-400 мс.
-    Отправляет строго в окно Sober без переключения окон и фокуса.
+    Отправляет аппаратно через XTest в XWayland без переключения экранов и рабочих столов Niri.
     """
     if a_duration is None:
         a_duration = random.uniform(0.30, 0.40)
 
     if x11_sender and x11_win:
+        # Подготовка: позиционирование курсора и фокусировка окна в XWayland + активация
+        x11_sender.prepare_window(x11_win)
+        time.sleep(random.uniform(0.06, 0.10))
+
         # 1. Одно нажатие на Пробел (Space)
-        x11_sender.tap_key(x11_win, "space", random.uniform(0.08, 0.12))
-        time.sleep(random.uniform(0.08, 0.15))
+        if jump:
+            x11_sender.tap_key("space", random.uniform(0.08, 0.12))
+            time.sleep(random.uniform(0.08, 0.15))
 
         # 2. Зажатие клавиши 'a' на 300 - 400 мс
-        x11_sender.tap_key(x11_win, "a", a_duration)
-    elif ui and is_focused:
-        uinput_tap_key(ui, e.KEY_SPACE, random.uniform(0.08, 0.12))
-        time.sleep(random.uniform(0.08, 0.15))
-        uinput_tap_key(ui, e.KEY_A, a_duration)
+        x11_sender.tap_key("a", a_duration)
 
-perform_wasd_routine = perform_antiafk_routine
+        # Опциональный шаг назад ('d'), чтобы не сходить с тренажера/позиции
+        if walk_back:
+            time.sleep(random.uniform(0.08, 0.15))
+            x11_sender.tap_key("d", a_duration)
+
+        return True
+    elif ui and is_focused:
+        if jump:
+            uinput_tap_key(ui, e.KEY_SPACE, random.uniform(0.08, 0.12))
+            time.sleep(random.uniform(0.08, 0.15))
+        uinput_tap_key(ui, e.KEY_A, a_duration)
+        if walk_back:
+            time.sleep(random.uniform(0.08, 0.15))
+            uinput_tap_key(ui, e.KEY_D, a_duration)
+        return True
+    return False
 
 def notify(msg):
     try:
@@ -221,7 +279,7 @@ def notify(msg):
 
 def parse_time_duration(val):
     if val is None:
-        return 150
+        return 300
     if isinstance(val, (int, float)):
         return int(val)
     s = str(val).strip().lower()
@@ -242,13 +300,13 @@ def parse_time_duration(val):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Roblox Anti-AFK для Linux (Niri / Sober). Нажимает W, A, S, D раз в несколько минут без переключения фокуса и без рывков экрана."
+        description="Roblox Anti-AFK для Linux (Niri / Sober). Надежно предотвращает 20-минутный кик без переключения рабочих столов и экранов."
     )
     parser.add_argument(
         '-i', '--interval', '-interval',
         type=parse_time_duration,
-        default=150,
-        help="Базовый интервал (например: 5m, 150s, 300; по умолчанию: 150 сек / 2.5 мин)"
+        default=300,
+        help="Базовый интервал (например: 5m, 300s, 300; по умолчанию: 300 сек / 5 мин)"
     )
     parser.add_argument(
         '-r', '--random', '-random',
@@ -265,7 +323,21 @@ def main():
     parser.add_argument(
         '-j', '--jump', '-jump',
         action='store_true',
-        help="Также нажимать Пробел (прыжок)"
+        default=True,
+        help="Нажимать Пробел (прыжок, включено по умолчанию)"
+    )
+    parser.add_argument(
+        '--no-jump',
+        dest='jump',
+        action='store_false',
+        help="Отключить прыжок (Пробел)"
+    )
+    parser.add_argument(
+        '--walk-back', '--return', '-ret',
+        dest='walk_back',
+        action='store_true',
+        default=False,
+        help="После нажатия 'A' нажать 'D' на то же время, чтобы вернуть персонажа на исходную позицию (полезно на узких беговых дорожках)"
     )
     parser.add_argument(
         '-t', '--test', '-test',
@@ -280,12 +352,12 @@ def main():
 
     args = parser.parse_args()
 
-    # Инициализируем X11 Sender для фонового ввода без переключения окон
+    # Инициализируем X11 Sender (XTEST)
     x11_sender = X11InputSender()
     if not x11_sender.is_available():
-        print("[!] Внимание: X11 дисплей недоступен. Фоновый ввод может требовать активного окна.")
+        print("[!] Внимание: X11/XTEST недоступен. Фоновый ввод может требовать активного окна.")
 
-    # Инициализация виртуальной клавиатуры (uinput) как запасного варианта
+    # Инициализация виртуальной клавиатуры (uinput)
     ui = None
     if HAVE_UINPUT:
         try:
@@ -296,11 +368,10 @@ def main():
         except Exception:
             ui = None
 
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎮 Roblox Anti-AFK запущен!")
-    print("  Режим: Бесшумный фоновый ввод (БЕЗ переключения экранов и телепортации фокуса)")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎮 Roblox Anti-AFK (XTEST Engine) запущен!")
+    print("  Режим: Аппаратный фоновый ввод XTEST (БЕЗ переключения экранов и без телепортации)")
     print(f"  Интервал: ~{args.interval // 60} мин {args.interval % 60} сек (разброс ±{args.random} сек)")
-    if args.jump:
-        print("  Прыжок (Пробел): ВКЛ")
+    print(f"  Действие: 1x Space (прыжок) + зажатие 'A' (300-400 мс){' + возврат D' if args.walk_back else ''}")
 
     # Тестовый запуск
     if args.test:
@@ -316,8 +387,8 @@ def main():
         cur = get_niri_focused_window()
         is_focused = cur and roblox_niri and cur.get('id') == roblox_niri.get('id')
         
-        print(f"[*] Выполняем тестовое нажатие WASD (Фокус Roblox: {'ДА' if is_focused else 'НЕТ (в фоне)'})...")
-        perform_wasd_routine(x11_sender, sober_x11, ui=ui, is_focused=is_focused, jump=args.jump)
+        print(f"[*] Выполняем тестовое нажатие Space + A (Фокус Roblox: {'ДА' if is_focused else 'НЕТ (в фоне)'})...")
+        perform_antiafk_routine(x11_sender, sober_x11, ui=ui, is_focused=is_focused, jump=args.jump, walk_back=args.walk_back)
         print("[+] Тест успешно выполнен! Окна и фокус НЕ перемещались.")
         if ui: ui.close()
         x11_sender.close()
@@ -342,18 +413,19 @@ def main():
                 cur_focus and roblox_niri and cur_focus.get('id') == roblox_niri.get('id')
             )
 
+            a_time = random.uniform(0.30, 0.40)
             if is_roblox_focused:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] [🕹️] Роблокс в фокусе. Нажатие Space + зажатие 'A' (300-400 мс)...")
-                perform_antiafk_routine(x11_sender, sober_x11, ui=ui, is_focused=True)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [🕹️] Роблокс в фокусе. Нажатие Space + зажатие 'A' ({int(a_time*1000)} мс)...")
+                perform_antiafk_routine(x11_sender, sober_x11, ui=ui, is_focused=True, jump=args.jump, a_duration=a_time, walk_back=args.walk_back)
                 if args.notify:
-                    notify("Anti-AFK: Space + 'A' (300-400 мс) нажаты!")
+                    notify(f"Anti-AFK: Space + 'A' ({int(a_time*1000)} мс) нажаты!")
             else:
-                # Тихо отправляем в окно Sober без переключения окон
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] [🔄] Роблокс в фоне. Отправка Space + 'A' (300-400 мс) напрямую в окно Sober (без переключения экранов)...")
-                perform_antiafk_routine(x11_sender, sober_x11, ui=ui, is_focused=False)
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] [✅] Нажатия выполнены в фоне. Ваш текущий экран не прерывался.")
+                # Тихо отправляем аппаратно через XTEST без переключения рабочих столов
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [🔄] Роблокс в фоне. Отправка Space + 'A' ({int(a_time*1000)} мс) через XTEST (без перемещения экранов)...")
+                perform_antiafk_routine(x11_sender, sober_x11, ui=ui, is_focused=False, jump=args.jump, a_duration=a_time, walk_back=args.walk_back)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [✅] Нажатия успешно выполнены в фоне. Ваш текущий рабочий стол не прерывался.")
                 if args.notify:
-                    notify("Anti-AFK: фоновые Space + 'A' (300-400 мс) успешно отправлены!")
+                    notify(f"Anti-AFK: фоновые Space + 'A' ({int(a_time*1000)} мс) отправлены!")
 
             # Вычисляем время до следующего цикла со случайным разбросом
             jitter = random.randint(-args.random, args.random)

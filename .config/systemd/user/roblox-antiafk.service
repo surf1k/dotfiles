@@ -1,0 +1,14 @@
+[Unit]
+Description=Roblox Anti-AFK Service (XTEST background engine)
+After=graphical-session.target
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY=:0
+ExecStart=/home/ym1co/.local/bin/roblox-antiafk -bg -i 5m
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
