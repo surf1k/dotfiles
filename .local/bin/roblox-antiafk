@@ -94,19 +94,15 @@ class X11InputSender:
         self.x11.XStringToKeysym.restype = c_ulong
         self.x11.XKeysymToKeycode.argtypes = [c_void_p, c_ulong]
         self.x11.XKeysymToKeycode.restype = ctypes.c_ubyte
-        self.x11.XWarpPointer.argtypes = [c_void_p, c_ulong, c_ulong, c_int, c_int, c_uint, c_uint, c_int, c_int]
-        self.x11.XWarpPointer.restype = c_int
+        self.x11.XGetInputFocus.argtypes = [c_void_p, POINTER(c_ulong), POINTER(c_int)]
+        self.x11.XGetInputFocus.restype = c_int
         self.x11.XSetInputFocus.argtypes = [c_void_p, c_ulong, c_int, c_ulong]
         self.x11.XSetInputFocus.restype = c_int
-        self.x11.XGetWindowAttributes.argtypes = [c_void_p, c_ulong, POINTER(XWindowAttributes)]
-        self.x11.XGetWindowAttributes.restype = c_int
         self.x11.XFlush.argtypes = [c_void_p]
         self.x11.XFlush.restype = c_int
 
         self.xtst.XTestFakeKeyEvent.argtypes = [c_void_p, c_uint, c_int, c_ulong]
         self.xtst.XTestFakeKeyEvent.restype = c_int
-        self.xtst.XTestFakeButtonEvent.argtypes = [c_void_p, c_uint, c_int, c_ulong]
-        self.xtst.XTestFakeButtonEvent.restype = c_int
 
     def is_available(self):
         return bool(self.disp and self.root and self.xtst)
@@ -135,36 +131,26 @@ class X11InputSender:
             self.x11.XFree(children_r)
         return sober_win
 
-    def get_window_size(self, win):
-        if not self.is_available() or not win:
-            return 2560, 1440
-        attr = XWindowAttributes()
-        if self.x11.XGetWindowAttributes(self.disp, win, byref(attr)):
-            return max(100, attr.width), max(100, attr.height)
-        return 2560, 1440
-
-    def prepare_window(self, win):
-        """Warp pointer to window center and focus it inside XWayland."""
-        if not self.is_available() or not win:
-            return False
-        w, h = self.get_window_size(win)
-        cx, cy = w // 2, h // 2
-        self.x11.XWarpPointer(self.disp, 0, win, 0, 0, 0, 0, cx, cy)
-        self.x11.XSetInputFocus(self.disp, win, 1, 0)
-        self.x11.XFlush(self.disp)
-        # Send a brief click to activate surface in XWayland
-        self.click_button(1, press_time=0.04)
-        return True
-
-    def click_button(self, button=1, press_time=0.05):
+    def get_input_focus(self):
         if not self.is_available():
+            return None, None
+        win = c_ulong()
+        rev = c_int()
+        try:
+            self.x11.XGetInputFocus(self.disp, byref(win), byref(rev))
+            return win.value, rev.value
+        except Exception:
+            return None, None
+
+    def set_input_focus(self, win, revert_to=1):
+        if not self.is_available() or not win:
             return False
-        self.xtst.XTestFakeButtonEvent(self.disp, button, 1, 0)
-        self.x11.XFlush(self.disp)
-        time.sleep(press_time)
-        self.xtst.XTestFakeButtonEvent(self.disp, button, 0, 0)
-        self.x11.XFlush(self.disp)
-        return True
+        try:
+            self.x11.XSetInputFocus(self.disp, int(win), int(revert_to), 0)
+            self.x11.XFlush(self.disp)
+            return True
+        except Exception:
+            return False
 
     def tap_key(self, key_name, press_time=0.12):
         if not self.is_available():
@@ -233,31 +219,60 @@ def uinput_tap_key(ui, key_code, press_time=0.14):
     ui.write(e.EV_KEY, key_code, 0)
     ui.syn()
 
+def ensure_niri_focus(target_win_id):
+    if not target_win_id:
+        return
+    cur = get_niri_focused_window()
+    if not cur or cur.get('id') != target_win_id:
+        try:
+            subprocess.run(
+                ['niri', 'msg', 'action', 'focus-window', '--id', str(target_win_id)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False
+            )
+        except Exception:
+            pass
+
 def perform_antiafk_routine(x11_sender, x11_win, ui=None, is_focused=False, jump=True, a_duration=None, walk_back=True):
     """
     Выполняет: 1 раз Пробел (Space) + зажатие 'A' на 300-400 мс + возврат 'D' на то же время.
-    Отправляет аппаратно через XTest в XWayland без переключения экранов и рабочих столов Niri.
+    Отправляет аппаратно через XTest в XWayland БЕЗ движения курсора мыши,
+    БЕЗ кликов мыши и с абсолютной защитой фокуса активного окна пользователя.
     """
     if a_duration is None:
         a_duration = random.uniform(0.30, 0.40)
 
+    niri_focus_before = get_niri_focused_window()
+    target_niri_id = niri_focus_before.get('id') if niri_focus_before else None
+
     if x11_sender and x11_win:
-        # Подготовка: позиционирование курсора и фокусировка окна в XWayland + активация
-        x11_sender.prepare_window(x11_win)
-        time.sleep(random.uniform(0.06, 0.10))
+        prev_x11_win, prev_x11_rev = x11_sender.get_input_focus()
+        try:
+            # Направляем клавиатурный ввод X11 на Sober БЕЗ перемещения курсора мыши и БЕЗ кликов!
+            x11_sender.set_input_focus(x11_win)
+            time.sleep(random.uniform(0.04, 0.08))
 
-        # 1. Одно нажатие на Пробел (Space)
-        if jump:
-            x11_sender.tap_key("space", random.uniform(0.08, 0.12))
-            time.sleep(random.uniform(0.08, 0.15))
+            # 1. Одно нажатие на Пробел (Space)
+            if jump:
+                x11_sender.tap_key("space", random.uniform(0.08, 0.12))
+                time.sleep(random.uniform(0.08, 0.15))
 
-        # 2. Зажатие клавиши 'a' на 300 - 400 мс
-        x11_sender.tap_key("a", a_duration)
+            # 2. Зажатие клавиши 'a' на 300 - 400 мс
+            x11_sender.tap_key("a", a_duration)
 
-        # Опциональный шаг назад ('d'), чтобы не сходить с тренажера/позиции
-        if walk_back:
-            time.sleep(random.uniform(0.08, 0.15))
-            x11_sender.tap_key("d", a_duration)
+            # Опциональный шаг назад ('d'), чтобы не сходить с тренажера/позиции
+            if walk_back:
+                time.sleep(random.uniform(0.08, 0.15))
+                x11_sender.tap_key("d", a_duration)
+        finally:
+            # Восстанавливаем X11 фокус, если до этого было другое X11 окно
+            if prev_x11_win and prev_x11_win != x11_win:
+                x11_sender.set_input_focus(prev_x11_win, prev_x11_rev)
+
+            # Гарантируем, что активное окно в Niri не потеряло фокус
+            if target_niri_id:
+                ensure_niri_focus(target_niri_id)
 
         return True
     elif ui and is_focused:
