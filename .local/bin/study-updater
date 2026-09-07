@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+import sys
+import os
+import json
+import time
+import datetime
+
+CONFIG_DIR = os.path.expanduser("~/.config/study-daemon")
+CURRICULUM_FILE = os.path.join(CONFIG_DIR, "curriculum.json")
+VAULT_FEED_DIR = os.path.expanduser("~/Vault/07 🚀 Live Coding Feeds & Daily Quests")
+
+os.makedirs(CONFIG_DIR, exist_ok=True)
+os.makedirs(VAULT_FEED_DIR, exist_ok=True)
+
+ADVANCED_TECH_PACKS = [
+    {
+        "id": "tech_arch_01",
+        "phase": 3,
+        "subject": "💻 Информатика & CS",
+        "topic": "System Design: CAP Теорема",
+        "question": "В распределенных системах, согласно CAP-теореме, какими двумя свойствами из трех можно обладать одновременно?",
+        "options": [
+            "Любыми 2 из 3: Consistency (Согласованность), Availability (Доступность), Partition Tolerance (Устойчивость к разделению)",
+            "Всеми 3 одновременно",
+            "Только Consistency и Speed",
+            "Ни одним"
+        ],
+        "correct_index": 0,
+        "explanation": "CAP-теорема Эрика Брюэра: при наличии сетевого разделения (Partition) распределенная база данных обязана выбирать между строгой согласованностью (CP: HBase, MongoDB) или постоянной доступностью (AP: Cassandra, DynamoDB)."
+    },
+    {
+        "id": "tech_db_01",
+        "phase": 3,
+        "subject": "💻 Информатика & CS",
+        "topic": "Базы данных: LSM-Tree vs B-Tree",
+        "question": "Почему базы данных, ориентированные на сверхвысокую скорость записи (RocksDB, Cassandra, ClickHouse), используют LSM-Tree (Log-Structured Merge-tree)?",
+        "options": [
+            "LSM-Tree преобразует случайную запись в последовательную (append-only в MemTable и WAL), что в разы быстрее на дисках",
+            "LSM-Tree не использует оперативную память",
+            "LSM-Tree работает только с реляционными таблицами",
+            "LSM-Tree не требует сжатия данных"
+        ],
+        "correct_index": 0,
+        "explanation": "LSM-Tree пишет данные последовательно в память (MemTable) и файл журнала (WAL), а затем фоново сбрасывает на диск в отсортированные SSTable через Compaction."
+    },
+    {
+        "id": "tech_proto_01",
+        "phase": 3,
+        "subject": "💻 Информатика & CS",
+        "topic": "Сетевые протоколы: HTTP/3 & QUIC",
+        "question": "Какое главное преимущество протокола HTTP/3 перед HTTP/2 при нестабильном интернет-соединении?",
+        "options": [
+            "HTTP/3 работает поверх UDP (QUIC) и устраняет проблему Head-of-Line Blocking на уровне TCP",
+            "HTTP/3 не шифрует трафик для скорости",
+            "HTTP/3 передает данные по проводам без пакетов",
+            "HTTP/3 заменяет IP адреса"
+        ],
+        "correct_index": 0,
+        "explanation": "В HTTP/2 потеря одного TCP-пакета блокирует все мультиплексированные потоки. В HTTP/3 (QUIC/UDP) каждый поток независим — потеря пакета в одном запросе не тормозит остальные."
+    },
+    {
+        "id": "tech_v8_01",
+        "phase": 3,
+        "subject": "💻 Информатика & CS",
+        "topic": "JavaScript Runtime: V8 Hidden Classes",
+        "question": "Как движок V8 (Node.js / Chrome) оптимизирует доступ к свойствам объектов JavaScript?",
+        "options": [
+            "Создает скрытые классы (Hidden Classes / Shapes) и использует Inline Caching, если структура свойств объектов инициализируется в одинаковом порядке",
+            "Преобразует все объекты в строковые JSON файлы",
+            "Переводит весь JS в бинарный C++ код до запуска",
+            "Хранит все объекты в едином связном списке"
+        ],
+        "correct_index": 0,
+        "explanation": "Если создавать поля объектов в одинаковом порядке (this.x = x; this.y = y;), V8 присваивает им один и тот же Hidden Class (Shape) и читает поля по фиксированному смещению в памяти (Inline Cache) со скоростью C++ структур."
+    },
+    {
+        "id": "tech_sec_01",
+        "phase": 3,
+        "subject": "💻 Информатика & CS",
+        "topic": "Веб-безопасность: XSS vs CSRF",
+        "question": "В чем ключевое различие между уязвимостями XSS (Cross-Site Scripting) и CSRF (Cross-Site Request Forgery)?",
+        "options": [
+            "XSS внедряет вредоносный JS-код в браузер жертвы, а CSRF обманом заставляет браузер жертвы отправить запрос с ее авторизационными куками на целевой сервер",
+            "XSS атакует базы данных, а CSRF — роутеры",
+            "XSS работает только на смартфонах",
+            "Они идентичны"
+        ],
+        "correct_index": 0,
+        "explanation": "XSS крадет сессии и токены исполнением чужого скрипта. CSRF подделывает действие пользователя (например, перевод денег), используя авто-прикрепление кук браузером (защита: SameSite=Strict куки и CSRF-токены)."
+    },
+    {
+        "id": "tech_linux_01",
+        "phase": 3,
+        "subject": "💻 Информатика & CS",
+        "topic": "Linux Kernel: Системный вызов epoll vs select",
+        "question": "Почему высоконагруженные серверы (Nginx, Node.js / libuv, Redis) используют epoll (Linux) / kqueue (BSD) вместо старого select/poll?",
+        "options": [
+            "epoll работает за O(1) от числа готовых событий (возвращает только активные дескрипторы через ядро), а select перебирает весь массив дескрипторов за O(N)",
+            "epoll не требует оперативной памяти",
+            "select работает только на 32-битных процессорах",
+            "epoll шифрует сетевые сокеты"
+        ],
+        "correct_index": 0,
+        "explanation": "epoll регистрирует сокеты в ядре один раз (дерево RB-Tree) и при наступлении событий кладет готовые дескрипторы в Ready List, масштабируясь до сотен тысяч соединений без падения скорости."
+    }
+]
+
+def update_curriculum():
+    with open(CURRICULUM_FILE, "r", encoding="utf-8") as f:
+        existing = json.load(f)
+    
+    existing_ids = {q["id"] for q in existing}
+    added = 0
+    for q in ADVANCED_TECH_PACKS:
+        if q["id"] not in existing_ids:
+            existing.append(q)
+            existing_ids.add(q["id"])
+            added += 1
+            
+    with open(CURRICULUM_FILE, "w", encoding="utf-8") as f:
+        json.dump(existing, f, ensure_ascii=False, indent=2)
+        
+    return added, len(existing)
+
+def update_vault_daily_quest():
+    today_str = datetime.date.today().strftime("%Y-%m-%d")
+    quest_file = os.path.join(VAULT_FEED_DIR, f"⚡ Daily Tech Quest — {today_str}.md")
+    
+    content = f"""# ⚡ Daily Tech & Coding Quest — {today_str}
+
+#daily_quest #coding #system_design #architecture
+
+> [!TIP] **Инженерный принцип дня**
+> "Преждевременная оптимизация — корень всех зол. Сначала сделай так, чтобы это работало. Затем сделай правильно. И только потом — сделай быстро."
+
+---
+
+## 🧠 Топ-концепции сегодняшнего дня:
+
+### 1. 🏗️ CAP-Теорема в HighLoad
+* **Consistency (Согласованность):** Все клиенты видят одни и те же данные в один момент времени.
+* **Availability (Доступность):** Каждый запрос получает ответ (успех/ошибка), даже если часть узлов упала.
+* **Partition Tolerance (Устойчивость к разделению сети):** Система продолжает работать при разрыве связи между серверами.
+* **Вывод:** В реальных распределенных сетях сбои сети неизбежны ($P$). Поэтому выбирают между $CP$ (банковские транзакции, строгий консенсус Raft) и $AP$ (соцсети, лайки, DNS).
+
+---
+
+### 2. ⚡ Быстрый движок V8: Hidden Classes
+* Никогда не добавляй поля объекта динамически в случайном порядке.
+* **Плохо:**
+  ```javascript
+  const a = {{}}; a.x = 1; a.y = 2;
+  const b = {{}}; b.y = 2; b.x = 1; // Разные Hidden Classes! Деоптимизация Inline Cache
+  ```
+* **Идеально:**
+  ```javascript
+  class Point {{
+      constructor(x, y) {{
+          this.x = x;
+          this.y = y; // Один фиксированный Shape в V8! Максимальная скорость CPU
+      }}
+  }}
+  ```
+
+---
+
+### 3. 🌐 HTTP/3 и протокол QUIC
+* Забудь про долгие TCP Handshake + TLS Handshake (2-3 RTT задержки).
+* **QUIC (UDP):** Совмещает рукопожатие и шифрование за 1 RTT (или 0-RTT при повторном подключении).
+* Никакого Head-of-Line Blocking при смене Wi-Fi на LTE!
+
+---
+
+## 🎯 Задание на сегодня:
+- [ ] Прорешать 1 задачу на LeetCode из раздела [[06 🗂️ Resources & Cheat Sheets/⚔️ LeetCode 75 Core Patterns & Templates|LeetCode Patterns]].
+- [ ] Пройти 10 вопросов в `study-trainer`.
+- [ ] Повторить конспект по математике / физике на черновике.
+"""
+    with open(quest_file, "w", encoding="utf-8") as f:
+        f.write(content.strip() + "\n")
+
+def main():
+    added, total = update_curriculum()
+    update_vault_daily_quest()
+    print(f"✅ Обновление завершено! Добавлено {added} новых хардкорных тем. Всего в базе: {total} вопросов.")
+    print(f"📁 Создан свежий Daily Tech Quest в Obsidian: ~/Vault/07 🚀 Live Coding Feeds & Daily Quests/")
+
+if __name__ == "__main__":
+    main()

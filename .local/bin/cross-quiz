@@ -1,0 +1,537 @@
+#!/usr/bin/env python3
+import sys
+import os
+
+# Use rock-solid GL (OpenGL) renderer to prevent Wayland Vulkan swapchain crashes
+os.environ["GSK_RENDERER"] = "gl"
+
+import json
+import time
+import random
+import urllib.parse
+import subprocess
+import gi
+
+gi.require_version('Gtk', '4.0')
+from gi.repository import Gtk, Gdk, GLib
+
+CONFIG_DIR = os.path.expanduser("~/.config/study-daemon")
+CURRICULUM_FILE = os.path.join(CONFIG_DIR, "curriculum.json")
+SCRATCHPAD_NOTE = "00 🎯 Dashboards & MOCs/✍️ Черновик и Быстрые Заметки.md"
+
+if CONFIG_DIR not in sys.path:
+    sys.path.insert(0, CONFIG_DIR)
+
+try:
+    from task_generator import ProceduralTaskGenerator
+except Exception:
+    ProceduralTaskGenerator = None
+
+try:
+    from analytics import AnalyticsTracker
+except Exception:
+    AnalyticsTracker = None
+
+def escape_text(text):
+    return GLib.markup_escape_text(str(text))
+
+def get_current_focused_workspace():
+    try:
+        res = subprocess.run(["niri", "msg", "-j", "workspaces"], capture_output=True, text=True, timeout=1.5)
+        if res.returncode == 0:
+            workspaces = json.loads(res.stdout)
+            for ws in workspaces:
+                if ws.get("is_focused"):
+                    return ws.get("id") or ws.get("idx")
+    except Exception:
+        pass
+    return None
+
+def switch_to_study_environment():
+    try:
+        # 1. Switch HDMI-A-1 (Monitor 2) to 'notes' workspace
+        subprocess.run(["niri", "msg", "action", "focus-monitor", "HDMI-A-1"], stderr=subprocess.DEVNULL)
+        subprocess.run(["niri", "msg", "action", "focus-workspace", "notes"], stderr=subprocess.DEVNULL)
+        
+        # 2. Switch DP-1 (Monitor 1) to 'study' workspace
+        subprocess.run(["niri", "msg", "action", "focus-monitor", "DP-1"], stderr=subprocess.DEVNULL)
+        subprocess.run(["niri", "msg", "action", "focus-workspace", "study"], stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+def restore_previous_workspace(ws_id):
+    if ws_id is not None:
+        try:
+            subprocess.run(["niri", "msg", "action", "focus-monitor", "DP-1"], stderr=subprocess.DEVNULL)
+            subprocess.run(["niri", "msg", "action", "focus-workspace", str(ws_id)], stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+def open_obsidian_note(vault_rel_path):
+    if not vault_rel_path:
+        return
+    try:
+        encoded = urllib.parse.quote(vault_rel_path)
+        uri = f"obsidian://open?vault=intensive-study-vault&file={encoded}"
+        subprocess.Popen(["xdg-open", uri], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+def close_study_helpers():
+    try:
+        subprocess.run(["pkill", "-9", "-f", "obsidian"], stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+def trigger_ambient_music():
+    try:
+        res = subprocess.run(["playerctl", "--player=ytmdesktop", "play"], capture_output=True, text=True, timeout=1)
+        if res.returncode != 0:
+            subprocess.Popen(["flatpak", "run", "app.ytmdesktop.ytmdesktop"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+CSS_STR = """
+window {
+    background-color: #0c140e;
+    color: #dce7cf;
+    font-family: 'Nunito', 'Inter', sans-serif;
+}
+
+.card-box {
+    background-color: #122016;
+    border: 2px solid rgba(222, 192, 126, 0.45);
+    border-radius: 22px;
+    padding: 30px;
+    margin: 10px;
+}
+
+.badge-blitz {
+    background-color: #3b1e38;
+    color: #fca5e8;
+    font-size: 14.5px;
+    font-weight: 800;
+    border-radius: 10px;
+    padding: 7px 16px;
+    border: 1px solid rgba(252, 165, 232, 0.4);
+}
+
+.badge-progress {
+    background-color: #1a323c;
+    color: #8ed6cd;
+    font-size: 14px;
+    font-weight: 700;
+    border-radius: 10px;
+    padding: 7px 14px;
+    border: 1px solid rgba(142, 214, 205, 0.4);
+}
+
+.badge-score {
+    background-color: #1d3623;
+    color: #dec07e;
+    font-size: 14px;
+    font-weight: 800;
+    border-radius: 10px;
+    padding: 7px 14px;
+    border: 1px solid rgba(222, 192, 126, 0.4);
+}
+
+.badge-streak {
+    background-color: #422a18;
+    color: #fed594;
+    font-size: 14px;
+    font-weight: 800;
+    border-radius: 10px;
+    padding: 7px 14px;
+    border: 1px solid rgba(254, 213, 148, 0.4);
+}
+
+.scratchpad-info-box {
+    background-color: #18281f;
+    border: 2px dashed rgba(120, 196, 93, 0.5);
+    border-radius: 14px;
+    padding: 12px 18px;
+    margin-top: 12px;
+    margin-bottom: 14px;
+}
+
+.scratchpad-info-box label {
+    color: #dbf6e3;
+    font-size: 14.5px;
+    font-weight: 700;
+}
+
+.question-text {
+    font-family: 'Nunito', 'Inter', sans-serif;
+    font-size: 19.5px;
+    font-weight: 800;
+    color: #ffffff;
+    margin-top: 12px;
+    margin-bottom: 18px;
+    line-height: 1.5;
+}
+
+button.option-btn {
+    background-color: #182e1f;
+    background-image: none;
+    border: 2px solid rgba(90, 130, 95, 0.6);
+    border-radius: 16px;
+    padding: 15px 22px;
+    margin-bottom: 10px;
+    box-shadow: none;
+}
+
+button.option-btn label {
+    font-family: 'Nunito', 'Inter', sans-serif;
+    color: #dce7cf;
+    font-size: 16.5px;
+    font-weight: 700;
+}
+
+button.option-btn:hover {
+    background-color: #24462e;
+    border-color: #78c45d;
+}
+
+button.option-btn:hover label {
+    color: #ffffff;
+}
+
+button.option-correct, button.option-correct:disabled {
+    background-color: #1e5a2b;
+    border: 2px solid #78c45d;
+    opacity: 1.0;
+}
+
+button.option-correct label, button.option-correct:disabled label {
+    color: #ffffff;
+    font-weight: 800;
+}
+
+button.option-wrong, button.option-wrong:disabled {
+    background-color: #631e1e;
+    border: 2px solid #d4574a;
+    opacity: 1.0;
+}
+
+button.option-wrong label, button.option-wrong:disabled label {
+    color: #ffcccc;
+    font-weight: 800;
+}
+
+.explanation-box {
+    background-color: #0e1a10;
+    border-left: 5px solid #dec07e;
+    border-radius: 12px;
+    padding: 16px;
+    margin-top: 14px;
+    font-size: 16px;
+}
+
+.explanation-box label {
+    color: #d4e3c5;
+    font-size: 16px;
+    line-height: 1.6;
+}
+
+button.next-btn {
+    background-color: #78c45d;
+    background-image: none;
+    border: 2px solid #78c45d;
+    border-radius: 14px;
+    padding: 14px 34px;
+    margin-top: 14px;
+}
+
+button.next-btn label {
+    color: #0c140e;
+    font-size: 16px;
+    font-weight: 900;
+}
+
+button.next-btn:hover {
+    background-color: #96e077;
+    border-color: #96e077;
+}
+
+.summary-score-big {
+    font-size: 32px;
+    font-weight: 900;
+    color: #dec07e;
+    margin-top: 10px;
+    margin-bottom: 10px;
+}
+"""
+
+class BlitzQuizApp(Gtk.Application):
+    def __init__(self, total_questions=10):
+        super().__init__(application_id="dev.ym1co.study.blitz")
+        self.total_questions = total_questions
+        self.current_idx = 0
+        self.score = 0
+        self.streak = 0
+        self.max_streak = 0
+        self.start_time = 0
+        self.window = None
+
+    def do_activate(self):
+        if not os.path.exists(CURRICULUM_FILE):
+            print("Curriculum not found!")
+            self.quit()
+            return
+
+        with open(CURRICULUM_FILE, "r", encoding="utf-8") as f:
+            self.curriculum = json.load(f)
+
+        self.prev_workspace = get_current_focused_workspace()
+        switch_to_study_environment()
+        open_obsidian_note(SCRATCHPAD_NOTE)
+        trigger_ambient_music()
+
+        # Build list of questions
+        self.questions = []
+        for _ in range(self.total_questions):
+            if ProceduralTaskGenerator and random.random() < 0.30:
+                self.questions.append(ProceduralTaskGenerator.get_random_task())
+            else:
+                self.questions.append(random.choice(self.curriculum))
+
+        # Main GTK4 Window (Аккуратное плавающее окно)
+        self.window = Gtk.ApplicationWindow(application=self)
+        self.window.set_title("⚡ Кросс-Опрос Блиц (10 вопросов)")
+        self.window.set_default_size(800, 680)
+        self.window.set_modal(True)
+        self.window.set_resizable(False)
+
+        self.window.connect("close-request", self.on_close_request)
+
+        key_controller = Gtk.EventControllerKey.new()
+        key_controller.connect("key-pressed", self.on_key_pressed)
+        self.window.add_controller(key_controller)
+
+        provider = Gtk.CssProvider()
+        provider.load_from_data(CSS_STR.encode("utf-8"))
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(),
+            provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+
+        self.scroller = Gtk.ScrolledWindow()
+        self.scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
+        self.outer_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+
+        self.scroller.set_child(self.outer_box)
+        self.window.set_child(self.scroller)
+        self.window.present()
+
+        self.render_current_question()
+
+    def render_current_question(self):
+        # Clear outer box
+        child = self.outer_box.get_first_child()
+        while child:
+            next_child = child.get_next_sibling()
+            self.outer_box.remove(child)
+            child = next_child
+
+        if self.current_idx >= len(self.questions):
+            self.render_summary()
+            return
+
+        q = self.questions[self.current_idx]
+        vault_file = q.get("vault_file")
+        if vault_file:
+            open_obsidian_note(vault_file)
+
+        card_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        card_box.add_css_class("card-box")
+
+        # 1. Header Badges
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        
+        blitz_badge = Gtk.Label(label="⚡ БЛИЦ РАУНД")
+        blitz_badge.add_css_class("badge-blitz")
+
+        prog_badge = Gtk.Label(label=f"🎯 Вопрос {self.current_idx + 1} из {self.total_questions}")
+        prog_badge.add_css_class("badge-progress")
+
+        score_badge = Gtk.Label(label=f"⭐ Счет: {self.score}")
+        score_badge.add_css_class("badge-score")
+
+        streak_badge = Gtk.Label(label=f"🔥 Серия: {self.streak}")
+        streak_badge.add_css_class("badge-streak")
+
+        header_box.append(blitz_badge)
+        header_box.append(prog_badge)
+        header_box.append(score_badge)
+        header_box.append(streak_badge)
+        card_box.append(header_box)
+
+        # 2. Scratchpad info
+        scratch_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        scratch_box.add_css_class("scratchpad-info-box")
+        scratch_label = Gtk.Label()
+        subj = q.get("subject", "Предмет")
+        topic = q.get("topic", "")
+        scratch_label.set_markup(f"📖 <b>[{escape_text(subj)}: {escape_text(topic)}]</b> Конспект и черновик открыты в Obsidian на 2-м экране!")
+        scratch_label.set_wrap(True)
+        scratch_label.set_xalign(0.0)
+        scratch_box.append(scratch_label)
+        card_box.append(scratch_box)
+
+        # 3. Question text
+        q_label = Gtk.Label(label=q["question"])
+        q_label.set_wrap(True)
+        q_label.set_xalign(0.0)
+        q_label.add_css_class("question-text")
+        card_box.append(q_label)
+
+        # 4. Options buttons
+        self.option_buttons = []
+        letters = ["A", "B", "C", "D"]
+        for idx, opt_text in enumerate(q.get("options", [])):
+            btn = Gtk.Button()
+            btn.add_css_class("option-btn")
+            lbl = Gtk.Label(label=f"{letters[idx]}.  {opt_text}")
+            lbl.set_xalign(0.0)
+            lbl.set_wrap(True)
+            btn.set_child(lbl)
+            btn.connect("clicked", self.on_option_clicked, idx)
+            card_box.append(btn)
+            self.option_buttons.append(btn)
+
+        # 5. Feedback Box
+        self.feedback_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.feedback_box.add_css_class("explanation-box")
+        self.feedback_box.set_visible(False)
+        
+        self.feedback_title = Gtk.Label()
+        self.feedback_title.set_xalign(0.0)
+        self.feedback_label = Gtk.Label()
+        self.feedback_label.set_wrap(True)
+        self.feedback_label.set_xalign(0.0)
+
+        self.feedback_box.append(self.feedback_title)
+        self.feedback_box.append(self.feedback_label)
+        card_box.append(self.feedback_box)
+
+        # 6. Next Question Button
+        btn_label = "Следующий вопрос →" if self.current_idx + 1 < self.total_questions else "Посмотреть результаты 🏆"
+        self.next_btn = Gtk.Button(label=btn_label)
+        self.next_btn.add_css_class("next-btn")
+        self.next_btn.set_visible(False)
+        self.next_btn.connect("clicked", self.on_next_clicked)
+        card_box.append(self.next_btn)
+
+        self.outer_box.append(card_box)
+        self.question_start_time = time.time()
+
+    def on_option_clicked(self, button, chosen_idx):
+        q = self.questions[self.current_idx]
+        correct_idx = q.get("correct_index", 0)
+        is_correct = (chosen_idx == correct_idx)
+        elapsed = round(time.time() - getattr(self, "question_start_time", time.time()), 1)
+
+        if AnalyticsTracker:
+            AnalyticsTracker.record_answer(
+                task_id=q.get("id", f"gen_{int(time.time())}"),
+                subject=q.get("subject"),
+                topic=q.get("topic"),
+                is_correct=is_correct,
+                time_spent=elapsed,
+                session_type="blitz"
+            )
+
+        for btn in self.option_buttons:
+            btn.set_sensitive(False)
+
+        if chosen_idx == correct_idx:
+            self.score += 1
+            self.streak += 1
+            self.max_streak = max(self.max_streak, self.streak)
+            button.add_css_class("option-correct")
+            self.feedback_title.set_markup("<span foreground='#78c45d'><b>🎉 ВЕРНО! (+1 балл)</b></span>")
+        else:
+            self.streak = 0
+            button.add_css_class("option-wrong")
+            self.option_buttons[correct_idx].add_css_class("option-correct")
+            self.feedback_title.set_markup("<span foreground='#d4574a'><b>❌ НЕВЕРНО!</b></span>")
+
+        self.feedback_label.set_text(q.get("explanation", ""))
+        self.feedback_box.set_visible(True)
+        self.next_btn.set_visible(True)
+
+    def on_next_clicked(self, button):
+        self.current_idx += 1
+        self.render_current_question()
+
+    def render_summary(self):
+        card_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        card_box.add_css_class("card-box")
+
+        pct = int((self.score / max(1, self.total_questions)) * 100)
+
+        title = Gtk.Label()
+        title.set_markup(f"<span font_size='22pt'><b>🏆 ИТОГИ БЛИЦ-РАУНДА</b></span>")
+        title.set_halign(Gtk.Align.CENTER)
+        card_box.append(title)
+
+        score_lbl = Gtk.Label()
+        score_lbl.set_markup(f"<span font_size='26pt' foreground='#dec07e'><b>{self.score} / {self.total_questions} ({pct}%)</b></span>")
+        score_lbl.set_halign(Gtk.Align.CENTER)
+        card_box.append(score_lbl)
+
+        info_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        info_box.add_css_class("scratchpad-info-box")
+
+        streak_lbl = Gtk.Label()
+        streak_lbl.set_markup(f"🔥 <b>Максимальная серия (Streak):</b> {self.max_streak}")
+        streak_lbl.set_xalign(0.0)
+        info_box.append(streak_lbl)
+
+        verdict_lbl = Gtk.Label()
+        if pct >= 90:
+            verdict_lbl.set_markup("👑 <b>ОЦЕНКА:</b> Божественный уровень! Знания по всем 13 предметам на высоте.")
+        elif pct >= 70:
+            verdict_lbl.set_markup("🔥 <b>ОЦЕНКА:</b> Отличный результат! Мозг работает на полной мощности.")
+        else:
+            verdict_lbl.set_markup("📖 <b>ОЦЕНКА:</b> Хорошая тренировка. Повтори слабые темы в Obsidian.")
+        verdict_lbl.set_xalign(0.0)
+        info_box.append(verdict_lbl)
+
+        card_box.append(info_box)
+
+        finish_btn = Gtk.Button(label="Завершить Блиц →")
+        finish_btn.add_css_class("next-btn")
+        finish_btn.connect("clicked", self.on_finish_clicked)
+        card_box.append(finish_btn)
+
+        self.outer_box.append(card_box)
+
+    def on_finish_clicked(self, button):
+        close_study_helpers()
+        restore_previous_workspace(self.prev_workspace)
+        self.window.close()
+
+    def on_close_request(self, window):
+        close_study_helpers()
+        restore_previous_workspace(self.prev_workspace)
+        return False
+
+    def on_key_pressed(self, controller, keyval, keycode, state):
+        if keyval == Gdk.KEY_Escape:
+            self.on_finish_clicked(None)
+            return True
+        return False
+
+def main():
+    count = 10
+    if len(sys.argv) > 1 and sys.argv[1].isdigit():
+        count = int(sys.argv[1])
+    app = BlitzQuizApp(total_questions=count)
+    app.run([])
+
+if __name__ == "__main__":
+    main()

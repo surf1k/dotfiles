@@ -1,0 +1,24 @@
+font=Nunito 12
+background-color=#0c140ee8
+text-color=#dce7cf
+border-color=#dec07e
+border-radius=14
+border-size=2
+progress-color=source #78c45d
+margin=14
+padding=14,16
+width=360
+height=140
+default-timeout=5000
+max-icon-size=48
+icon-location=left
+layer=overlay
+
+[urgency=low]
+border-color=#78c45d
+default-timeout=3000
+
+[urgency=high]
+border-color=#d4574a
+text-color=#ffffff
+default-timeout=0

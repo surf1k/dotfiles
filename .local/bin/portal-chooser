@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Official Niri Wayland Screen Chooser for xdg-desktop-portal-wlr
+CHOICE=$(fuzzel --dmenu -p "📺 Экран для стрима Discord: " 2>/dev/null)
+if [ -z "$CHOICE" ]; then
+    echo "DP-1"
+else
+    echo "$CHOICE"
+fi

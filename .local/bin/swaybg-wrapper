@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+# Wait for Wayland display socket (prevents race condition on cold boot)
+for i in {1..30}; do
+    if [ -n "$WAYLAND_DISPLAY" ] && [ -e "/run/user/$UID/$WAYLAND_DISPLAY" ]; then
+        break
+    fi
+    CANDIDATE=$(ls -1t /run/user/$UID/wayland-* 2>/dev/null | grep -v '\.lock$' | head -n 1)
+    if [ -n "$CANDIDATE" ] && [ -S "$CANDIDATE" ]; then
+        export WAYLAND_DISPLAY=$(basename "$CANDIDATE")
+        break
+    fi
+    sleep 0.3
+done
+
+WALLPAPER="${HOME}/.config/wallpaper.jpg"
+if [ ! -f "$WALLPAPER" ]; then
+    WALLPAPER="${HOME}/Pictures/Wallpapers/5k-steampunk-emerald-observatory-art.png"
+fi
+
+exec /usr/bin/swaybg -i "$WALLPAPER" -m fill

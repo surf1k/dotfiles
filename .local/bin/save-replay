@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+REPLAY_DIR="$HOME/Videos/Replays"
+mkdir -p "$REPLAY_DIR"
+
+if pgrep -f "gpu-screen-recorder" > /dev/null; then
+    # Send SIGUSR1 to flush the 30-second replay buffer from RAM to disk
+    pkill -SIGUSR1 -f "gpu-screen-recorder"
+    
+    # Desktop notification
+    notify-send -u normal "🎬 Откат сохранен (30 сек)!" "Видео сохранено в: $REPLAY_DIR" 2>/dev/null || true
+else
+    # If not running, start service in background
+    systemctl --user start gpu-screen-recorder-replay.service 2>/dev/null
+    notify-send -u normal "🔴 Буфер откатов запущен" "Теперь нажимай Alt+F10 для сохранения последних 30 секунд!" 2>/dev/null || true
+fi

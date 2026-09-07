@@ -1,0 +1,89 @@
+* {
+    bg-col:        #0c140e;
+    bg-col-panel:  #14281a;
+    border-col:    #dec07e;
+    text-col:      #dce7cf;
+    accent-col:    #78c45d;
+    urgent-col:    #d4574a;
+
+    background-color: transparent;
+    text-color: @text-col;
+}
+
+window {
+    transparency: "real";
+    background-color: rgba(12, 20, 14, 0.96);
+    border: 2px;
+    border-color: @border-col;
+    border-radius: 18px;
+    width: 540px;
+    padding: 16px;
+    location: center;
+}
+
+mainbox {
+    background-color: transparent;
+    children: [ inputbar, listview ];
+    spacing: 12px;
+}
+
+inputbar {
+    background-color: @bg-col-panel;
+    border: 1.5px;
+    border-color: rgba(222, 192, 126, 0.4);
+    border-radius: 12px;
+    padding: 10px 14px;
+    children: [ prompt, entry ];
+}
+
+prompt {
+    background-color: transparent;
+    text-color: #dec07e;
+    font-weight: 800;
+    padding: 0 8px 0 0;
+}
+
+entry {
+    background-color: transparent;
+    text-color: #ffffff;
+    font-weight: 700;
+    placeholder: "Search...";
+    placeholder-color: #6b8e5e;
+}
+
+listview {
+    background-color: transparent;
+    lines: 8;
+    spacing: 6px;
+    scrollbar: false;
+}
+
+element {
+    background-color: transparent;
+    text-color: @text-col;
+    border-radius: 12px;
+    padding: 10px 14px;
+    orientation: horizontal;
+    cursor: pointer;
+}
+
+element selected {
+    background-color: #78c45d;
+    text-color: #0c140e;
+}
+
+element-icon {
+    background-color: transparent;
+    text-color: inherit;
+    size: 26px;
+    padding: 0 12px 0 0;
+    cursor: inherit;
+}
+
+element-text {
+    background-color: transparent;
+    text-color: inherit;
+    vertical-align: 0.5;
+    font-weight: 700;
+    cursor: inherit;
+}

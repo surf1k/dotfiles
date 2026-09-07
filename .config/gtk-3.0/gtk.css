@@ -1,0 +1,59 @@
+@import url("dank-colors.css");
+
+* {
+    font-family: 'Nunito', 'Inter', sans-serif;
+}
+
+window {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+}
+
+headerbar {
+    background-color: @headerbar_bg_color;
+    color: @headerbar_fg_color;
+    border-bottom: 1px solid rgba(222, 192, 126, 0.25);
+}
+
+headerbar title {
+    color: #dec07e;
+    font-weight: 800;
+}
+
+button {
+    background-color: #14281a;
+    color: #dce7cf;
+    border: 1px solid rgba(120, 196, 93, 0.35);
+    border-radius: 10px;
+    padding: 6px 12px;
+}
+
+button:hover {
+    background-color: #1d3e26;
+    border-color: #78c45d;
+    color: #ffffff;
+}
+
+button:checked, button.suggested-action {
+    background-color: #78c45d;
+    color: #0c140e;
+    font-weight: 800;
+}
+
+entry {
+    background-color: #09120b;
+    color: #dce7cf;
+    border: 1px solid rgba(222, 192, 126, 0.35);
+    border-radius: 8px;
+}
+
+entry:focus {
+    border-color: #78c45d;
+}
+
+popover, menu {
+    background-color: #132418;
+    color: #dce7cf;
+    border: 1px solid rgba(222, 192, 126, 0.35);
+    border-radius: 12px;
+}

@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+
+# Interactive screen selector for xdg-desktop-portal-wlr & Discord/Vesktop
+
+CHOICE=$(printf "🖥️ Монитор 1: MSI MAG 27\" (DP-1 2560x1440)\n🖥️ Монитор 2: Samsung 24\" (HDMI-A-1 1080p)\n✂️ Выбрать область курсором (Slurp)" | rofi -dmenu -p "📺 Выбери экран для стрима" -theme-str '
+window {
+    width: 480px;
+    border: 2px solid #b08d57;
+    border-radius: 12px;
+    background-color: #0d1710;
+}
+mainbox {
+    background-color: #0d1710;
+    padding: 16px;
+}
+inputbar {
+    background-color: #1a2c1f;
+    border: 1px solid #2e4a2e;
+    border-radius: 8px;
+    padding: 8px;
+    margin: 0 0 12px 0;
+    children: [ prompt, entry ];
+}
+prompt {
+    color: #d4b877;
+    font-weight: bold;
+    margin: 0 8px 0 0;
+}
+entry {
+    color: #ffffff;
+}
+listview {
+    background-color: transparent;
+    lines: 3;
+    spacing: 6px;
+}
+element {
+    background-color: #16241a;
+    border: 1px solid #28422b;
+    border-radius: 8px;
+    padding: 10px 14px;
+}
+element-text {
+    color: #e8f0d8;
+    font-weight: bold;
+}
+element selected {
+    background-color: #243e2b;
+    border-color: #6bb54e;
+}
+element-text selected {
+    color: #ffffff;
+}
+')
+
+case "$CHOICE" in
+    *"DP-1"*)
+        echo "DP-1"
+        ;;
+    *"HDMI-A-1"*)
+        echo "HDMI-A-1"
+        ;;
+    *"Slurp"*)
+        slurp -f "%o" -or 2>/dev/null || echo "DP-1"
+        ;;
+    *)
+        # Default fallback
+        echo "DP-1"
+        ;;
+esac

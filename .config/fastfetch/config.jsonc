@@ -1,0 +1,63 @@
+{
+    "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
+    "logo": {
+        "source": "/home/ym1co/.config/fastfetch/icons.png",
+        "type": "kitty",
+        "width": 26,
+        "height": 13,
+        "padding": {
+            "top": 1,
+            "right": 3
+        }
+    },
+    "display": {
+        "separator": " \u001b[38;2;222;192;126m│\u001b[0m "
+    },
+    "modules": [
+        "break",
+        {
+            "type": "custom",
+            "format": " \u001b[1;38;2;222;192;126m          ⚙  \u001b[1;38;2;120;196;93mym1co\u001b[1;38;2;222;192;126m  ⚙\u001b[0m"
+
+
+        },
+        {
+            "type": "custom",
+            "format": " \u001b[38;2;222;192;126m━━ ⚙ ━━━━━━━━━━━━━━━━━━━━━━ ⚙ ━━\u001b[0m"
+        },
+        {
+            "type": "os",
+            "key": " \u001b[38;2;222;192;126m boiler \u001b[0m",
+            "format": "{2}"
+        },
+        {
+            "type": "wm",
+            "key": " \u001b[38;2;120;196;93m󰒓 gearbox\u001b[0m",
+            "format": "{1}"
+        },
+        {
+            "type": "uptime",
+            "key": " \u001b[38;2;222;192;126m󰥔 runtime\u001b[0m"
+        },
+        {
+            "type": "packages",
+            "key": " \u001b[38;2;120;196;93m󰏖 cogs   \u001b[0m",
+            "format": "{all} components"
+        },
+        {
+            "type": "media",
+            "key": " \u001b[38;2;222;192;126m󰎆 phono  \u001b[0m",
+            "format": "lua:local a = ...; local artist = a.artist or ''; local title = a.title or ''; artist = artist:match('^([^,;]+)') or artist; artist = artist:gsub('%s+[fF][eE]?[aA]?[tT]%.?%s+.*$', ''); artist = artist:gsub('%s+/%s+.*$', ''); artist = artist:gsub('%s+&%s+.*$', ''); artist = artist:gsub('%s+[xX]%s+.*$', ''); artist = artist:match('^%s*(.-)%s*$') or artist; if artist ~= '' and title ~= '' then return artist .. ' - ' .. title elseif title ~= '' then return title elseif artist ~= '' then return artist else return nil end"
+        },
+        {
+            "type": "custom",
+            "format": " \u001b[38;2;222;192;126m━━ ⚙ ━━━━━━━━━━━━━━━━━━━━━━ ⚙ ━━\u001b[0m"
+        },
+        {
+            "type": "colors",
+            "symbol": "circle",
+            "paddingLeft": 1
+        },
+        "break"
+    ]
+}

@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+import os
+import sys
+
+CONFIG_DIR = os.path.expanduser("~/.config/study-daemon")
+if CONFIG_DIR not in sys.path:
+    sys.path.insert(0, CONFIG_DIR)
+
+try:
+    from analytics import AnalyticsTracker
+except Exception as e:
+    print(f"Analytics module error: {e}")
+    sys.exit(1)
+
+# ANSI Colors
+GOLD = "\033[38;2;222;192;126m"
+GREEN = "\033[38;2;120;196;93m"
+RED = "\033[38;2;212;87;74m"
+CYAN = "\033[38;2;142;214;205m"
+PEACH = "\033[38;2;254;213;148m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RESET = "\033[0m"
+
+def main():
+    stats = AnalyticsTracker.get_stats()
+    
+    os.system("clear")
+    print(f"{GOLD}{BOLD}")
+    print("╔═══════════════════════════════════════════════════════════════════════════╗")
+    print("║         📊 ДИАГНОСТИКА ЗНАНИЙ: СТАТИСТИКА И КАРТА СЛОЖНОСТИ ТЕМ           ║")
+    print("╚═══════════════════════════════════════════════════════════════════════════╝")
+    print(f"{RESET}")
+
+    if not stats:
+        print(f"{CYAN}Данных пока нет! Решай чекпоинты (Win+P) или блиц-опросы (Win+Shift+P) для накопления статистики.{RESET}\n")
+        return
+
+    total_attempts = sum(v["total_attempts"] for v in stats.values())
+    total_correct = sum(v["correct_attempts"] for v in stats.values())
+    total_wrong = sum(v["wrong_attempts"] for v in stats.values())
+    overall_acc = round((total_correct / max(1, total_attempts)) * 100, 1)
+
+    print(f"{PEACH}🎯 ОБЩИЙ ПРОГРЕСС:{RESET}")
+    print(f"  • Всего решено задач: {BOLD}{total_attempts}{RESET}")
+    print(f"  • Общая точность: {GREEN if overall_acc >= 75 else RED}{BOLD}{overall_acc}%{RESET} (✅ {total_correct} верно / ❌ {total_wrong} ошибок)\n")
+
+    # Group by subject
+    by_subj = {}
+    for k, v in stats.items():
+        s = v["subject"]
+        if s not in by_subj:
+            by_subj[s] = {"total": 0, "correct": 0, "wrong": 0}
+        by_subj[s]["total"] += v["total_attempts"]
+        by_subj[s]["correct"] += v["correct_attempts"]
+        by_subj[s]["wrong"] += v["wrong_attempts"]
+
+    print(f"{CYAN}📚 УСПЕВАЕМОСТЬ ПО ПРЕДМЕТАМ:{RESET}")
+    print(f"  {'Предмет':<35} {'Всего':<8} {'Верно':<8} {'Ошибок':<8} {'Точность':<10}")
+    print("  " + "─" * 70)
+    for subj, data in sorted(by_subj.items(), key=lambda x: -(x[1]["total"])):
+        acc = round((data["correct"] / max(1, data["total"])) * 100, 1)
+        color = GREEN if acc >= 80 else (GOLD if acc >= 60 else RED)
+        print(f"  {subj:<35} {data['total']:<8} {data['correct']:<8} {data['wrong']:<8} {color}{acc}%{RESET}")
+    print()
+
+    # Weak topics
+    weak = [v for v in stats.values() if v["accuracy"] < 75.0]
+    if weak:
+        weak.sort(key=lambda x: (x["accuracy"], -x["wrong_attempts"]))
+        print(f"{RED}{BOLD}🚨 СЛАБЫЕ ТЕМЫ (ТРЕБУЮТ ПОВТОРЕНИЯ):{RESET}")
+        for w in weak[:8]:
+            print(f"  • [{w['subject']}] {BOLD}{w['topic']}{RESET}: точность {RED}{w['accuracy']}%{RESET} ({w['wrong_attempts']} ошибок из {w['total_attempts']} попыток)")
+        print()
+    else:
+        print(f"{GREEN}🟢 Все пройденные темы усвоены на 75%+! Отличная работа.{RESET}\n")
+
+    # Mastered topics
+    strong = [v for v in stats.values() if v["accuracy"] >= 85.0]
+    if strong:
+        strong.sort(key=lambda x: -x["total_attempts"])
+        print(f"{GREEN}{BOLD}🏆 ТОП ОСВОЕННЫХ ТЕМ:{RESET}")
+        for s in strong[:5]:
+            print(f"  • [{s['subject']}] {BOLD}{s['topic']}{RESET}: точность {GREEN}{s['accuracy']}%{RESET} (серия: 🔥 {s['current_streak']})")
+        print()
+
+    print(f"{DIM}Полный отчет и дашборд синхронизированы в Obsidian: '00 🎯 Dashboards & MOCs/📊 Статистика Обучения и Аналитика Тем.md'{RESET}\n")
+
+if __name__ == "__main__":
+    main()

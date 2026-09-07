@@ -1,0 +1,61 @@
+#!/bin/bash
+# fix-audio - Перезапуск и автоматическое восстановление аудио-устройств (PipeWire / WirePlumber)
+
+echo -e "\033[1;38;2;222;192;126m[fix-audio]\033[0m Сброс и перезапуск аудио-стека PipeWire..."
+
+# 1. Перезапускаем пользовательские сервисы PipeWire и WirePlumber
+systemctl --user restart pipewire pipewire-pulse wireplumber
+
+# 2. Ждём инициализации узлов ALSA и Bluetooth/USB
+sleep 1.5
+
+# 3. Ищем рабочий Sink (предпочитаем USB Composite Device, затем HDMI, затем Built-in)
+TARGET_SINK=$(wpctl status | awk '
+    /Sinks:/ { in_sinks=1; next }
+    /Sources:/ { in_sinks=0 }
+    in_sinks && /USB Composite Device/ {
+        match($0, /([0-9]+)\./, m)
+        if (m[1]) { print m[1]; exit }
+    }
+')
+
+if [ -z "$TARGET_SINK" ]; then
+    TARGET_SINK=$(wpctl status | awk '
+        /Sinks:/ { in_sinks=1; next }
+        /Sources:/ { in_sinks=0 }
+        in_sinks && /GB206|HDMI|Built-in/ {
+            match($0, /([0-9]+)\./, m)
+            if (m[1]) { print m[1]; exit }
+        }
+    ')
+fi
+
+if [ -n "$TARGET_SINK" ]; then
+    wpctl set-default "$TARGET_SINK" 2>/dev/null
+    wpctl set-mute "$TARGET_SINK" 0 2>/dev/null
+    echo -e "\033[1;38;2;120;196;93m[fix-audio]\033[0m Основной динамик назначен (Node ID: $TARGET_SINK)"
+else
+    echo -e "\033[1;38;2;222;192;126m[fix-audio]\033[0m Динамики перезапущены в стандартном режиме"
+fi
+
+# 4. Ищем рабочий Source (микрофон)
+TARGET_SOURCE=$(wpctl status | awk '
+    /Sources:/ { in_sources=1; next }
+    /Filters:/ { in_sources=0 }
+    in_sources && /USB Composite Device/ {
+        match($0, /([0-9]+)\./, m)
+        if (m[1]) { print m[1]; exit }
+    }
+')
+
+if [ -n "$TARGET_SOURCE" ]; then
+    wpctl set-default "$TARGET_SOURCE" 2>/dev/null
+    wpctl set-mute "$TARGET_SOURCE" 0 2>/dev/null
+    echo -e "\033[1;38;2;120;196;93m[fix-audio]\033[0m Микрофон назначен (Node ID: $TARGET_SOURCE)"
+fi
+
+if command -v notify-send >/dev/null 2>&1; then
+    notify-send -u normal -i audio-speakers "Аудио восстановлено" "Динамики и микрофон подключены заново."
+fi
+
+echo -e "\033[1;38;2;120;196;93m✔ Аудио успешно восстановлено!\033[0m"

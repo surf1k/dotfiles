@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+REPLAY="$1"
+[ -f "$REPLAY" ] || exit 0
+DIR=$(dirname "$REPLAY")
+NAME=$(basename "$REPLAY")
+BASE="${NAME%.*}"
+OUT="${DIR}/${BASE}.mov"
+
+(
+    # Transcode to DaVinci-native MOV (DNxHR LB) with lowest CPU/IO priority
+    nice -n 19 ionice -c 3 ffmpeg -y -i "$REPLAY" -c:v dnxhd -profile:v dnxhr_lb -pix_fmt yuv422p -c:a pcm_s16le "$OUT" > /dev/null 2>&1
+    
+    # Automatically prune older MOV files, keeping up to 50 recent ones
+    /home/ym1co/.local/bin/davinci-clean --keep 50 > /dev/null 2>&1
+) &

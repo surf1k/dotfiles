@@ -1,0 +1,59 @@
+* {
+    bg-col:        #0d1710;
+    bg-col-panel:  #16241a;
+    border-col:    #b08d57;
+    text-col:      #c8d8b8;
+    accent-col:    #6b8e4e;
+    urgent-col:    #8b3a2f;
+
+    background-color: transparent;
+    text-color: @text-col;
+    font: "JetBrainsMono Nerd Font 13";
+}
+
+window {
+    transparency: "real";
+    background-color: rgba(13, 23, 16, 0.95);
+    border: 2px;
+    border-color: @border-col;
+    border-radius: 12px;
+    width: 300px;
+    padding: 8px;
+    location: center;
+}
+
+mainbox {
+    background-color: transparent;
+    children: [ listview ];
+    spacing: 0px;
+}
+
+listview {
+    background-color: transparent;
+    lines: 3;
+    columns: 1;
+    cycle: true;
+    dynamic: true;
+    fixed-height: false;
+    scrollbar: false;
+    spacing: 4px;
+}
+
+element {
+    background-color: transparent;
+    text-color: @text-col;
+    border-radius: 8px;
+    padding: 10px 14px;
+    orientation: horizontal;
+    cursor: pointer;
+}
+
+element selected {
+    background-color: @accent-col;
+    text-color: #060d06;
+}
+
+element-text {
+    vertical-align: 0.5;
+    text-color: inherit;
+}

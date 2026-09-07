@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Theme: Emerald & Gold Clockwork Sanctuary
+# STRICTLY TARGETS ONLY THE KEYBOARD (ROYUAN Epomaker RT80)
+
+MODE="${1:-dual}"
+OPENRGB="/home/ym1co/.local/bin/openrgb"
+DEV="ROYUAN Epomaker RT80"
+
+case "$MODE" in
+    emerald)
+        echo "🌿 Клавиатура: Изумрудный (#78c45d)..."
+        $OPENRGB -d "$DEV" -m Direct -c 78c45d 2>&1 | grep -v "Connection attempt failed" || true
+        ;;
+    gold|brass)
+        echo "⚙️ Клавиатура: Золото / Латунь (#dec07e)..."
+        $OPENRGB -d "$DEV" -m Direct -c dec07e 2>&1 | grep -v "Connection attempt failed" || true
+        ;;
+    breathing)
+        echo "✨ Клавиатура: Дыхание Изумруда (#78c45d)..."
+        $OPENRGB -d "$DEV" -m Breathing -c 78c45d 2>&1 | grep -v "Connection attempt failed" || true
+        ;;
+    dual|*)
+        echo "🌿⚙️ Клавиатура: Изумруд + Золото (#78c45d, #dec07e)..."
+        $OPENRGB -d "$DEV" -m Direct -c 78c45d,dec07e 2>&1 | grep -v "Connection attempt failed" || true
+        ;;
+esac

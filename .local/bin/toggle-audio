@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+# Toggle master audio sink mute state
+wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle
+
+STATUS=$(wpctl get-volume @DEFAULT_AUDIO_SINK@)
+
+if echo "$STATUS" | grep -q "MUTED"; then
+    pw-play ~/.local/share/sounds/mic-off.wav 2>/dev/null &
+else
+    pw-play ~/.local/share/sounds/mic-on.wav 2>/dev/null &
+fi

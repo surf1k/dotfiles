@@ -1,0 +1,5 @@
+[screencast]
+max_fps=60
+output_name=DP-1
+chooser_type=none
+force_mod_linear=1

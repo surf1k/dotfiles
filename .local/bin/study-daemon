@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+import sys
+import os
+import time
+import json
+import random
+import fcntl
+import subprocess
+import re
+
+CONFIG_DIR = os.path.expanduser("~/.config/study-daemon")
+STATE_FILE = os.path.join(CONFIG_DIR, "state.json")
+
+MIN_INTERVAL_SEC = 120  # 2 минуты
+MAX_INTERVAL_SEC = 300  # 5 минут
+
+EXACT_GAME_COMMS = {
+    "cs2", "csgo_linux64", "dota2", "ultrakill.exe", "ultrakill",
+    "sober", "sober.bin", "RobloxPlayerBeta", "roblox"
+}
+
+GAME_REGEX = re.compile(
+    r'(?:'
+    r'steamapps/common/(?:Counter-Strike|dota 2|ULTRAKILL)'
+    r'|/\.minecraft/'
+    r'|gg\.dawn\.launcher'
+    r'|net\.prismlauncher\.'
+    r'|com\.mojang\.minecraft'
+    r'|org\.vinegarhq\.Sober'
+    r'|/sober\b'
+    r'|RobloxPlayer'
+    r'|\b(?:cs2|dota2|ultrakill|sober|roblox)\b'
+    r')',
+    re.IGNORECASE
+)
+
+WINDOW_GAME_REGEX = re.compile(
+    r'(?:'
+    r'steam_app_(?:730|570|1229490)'
+    r'|gg-dawn-launcher'
+    r'|prismlauncher'
+    r'|org\.vinegarhq\.Sober'
+    r'|\b(?:cs2|dota2|ultrakill|minecraft|sober|roblox|vinegar)\b'
+    r'|Counter-Strike'
+    r'|Dota 2'
+    r'|ULTRAKILL'
+    r'|Roblox'
+    r'|Sober'
+    r')',
+    re.IGNORECASE
+)
+
+def ensure_single_instance():
+    global lock_file
+    lock_file = open("/tmp/study-daemon.lock", "w")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except IOError:
+        print("study-daemon is already running. Exiting duplicate instance.", flush=True)
+        sys.exit(0)
+
+def is_enabled_and_not_paused():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                st = json.load(f)
+            if not st.get("enabled", True):
+                return False
+            if time.time() < st.get("paused_until", 0):
+                return False
+        except Exception:
+            pass
+    return True
+
+def is_game_running():
+    # 1. Check Niri active and background windows
+    try:
+        res = subprocess.run(["niri", "msg", "-j", "windows"], capture_output=True, text=True, timeout=1.5)
+        if res.returncode == 0:
+            windows = json.loads(res.stdout)
+            for w in windows:
+                app_id = w.get("app_id") or ""
+                title = w.get("title") or ""
+                if WINDOW_GAME_REGEX.search(app_id) or WINDOW_GAME_REGEX.search(title):
+                    return True
+    except Exception:
+        pass
+
+    # 2. Check /proc comm and exe paths with exact word boundary matching
+    try:
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            try:
+                with open(f"/proc/{pid}/comm", "r") as f:
+                    comm = f.read().strip()
+                if comm in EXACT_GAME_COMMS:
+                    return True
+
+                exe = os.readlink(f"/proc/{pid}/exe")
+                if GAME_REGEX.search(exe):
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    return False
+
+def launch_quiz():
+    try:
+        print("🚀 Запуск окна чекпоинта...", flush=True)
+        env = os.environ.copy()
+        if "WAYLAND_DISPLAY" not in env:
+            import glob
+            socks = sorted(glob.glob(f"/run/user/{os.getuid()}/wayland-*"), key=os.path.getmtime, reverse=True)
+            socks = [s for s in socks if not s.endswith(".lock")]
+            if socks:
+                env["WAYLAND_DISPLAY"] = os.path.basename(socks[0])
+        subprocess.run([os.path.expanduser("~/.local/bin/study-popup")], env=env)
+    except Exception as e:
+        print(f"Error launching popup: {e}", flush=True)
+
+def main():
+    ensure_single_instance()
+    print(f"Study Daemon started. Intensive interval: {MIN_INTERVAL_SEC}-{MAX_INTERVAL_SEC}s.", flush=True)
+    
+    last_quiz_time = time.time()
+    current_interval = random.randint(MIN_INTERVAL_SEC, MAX_INTERVAL_SEC)
+    print(f"Следующий чекпоинт через {current_interval} сек.", flush=True)
+    
+    was_gaming = False
+
+    while True:
+        time.sleep(10)
+        now = time.time()
+        
+        if not is_enabled_and_not_paused():
+            last_quiz_time = now
+            continue
+
+        gaming = is_game_running()
+        if gaming:
+            if not was_gaming:
+                print("🎮 Игра обнаружена. Автоматические чекпоинты на паузе (0 прерываний).", flush=True)
+                was_gaming = True
+            last_quiz_time = now
+            current_interval = random.randint(MIN_INTERVAL_SEC, MAX_INTERVAL_SEC)
+            continue
+        else:
+            if was_gaming:
+                print("💻 Игра закрыта. Обычный режим обучения возобновлен.", flush=True)
+                was_gaming = False
+
+        if now - last_quiz_time >= current_interval:
+            print("⚡ Интервал истек. Запуск чекпоинта...", flush=True)
+            if is_enabled_and_not_paused() and not is_game_running():
+                launch_quiz()
+            last_quiz_time = time.time()
+            current_interval = random.randint(MIN_INTERVAL_SEC, MAX_INTERVAL_SEC)
+            print(f"Следующий чекпоинт через {current_interval} сек.", flush=True)
+
+if __name__ == "__main__":
+    main()

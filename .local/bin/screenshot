@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+TARGET_DIR="$HOME/Pictures/Screenshots"
+mkdir -p "$TARGET_DIR"
+FILENAME="$TARGET_DIR/Screenshot_$(date +%Y-%m-%d_%H-%M-%S).png"
+
+if [ "$1" = "--full" ]; then
+    grim "$FILENAME"
+else
+    GEOM=$(slurp 2>/dev/null)
+    [ -z "$GEOM" ] && exit 0
+    grim -g "$GEOM" "$FILENAME"
+fi
+
+if [ -f "$FILENAME" ]; then
+    # Copy PNG directly into Wayland clipboard for instant pasting (Ctrl+V) into Telegram, Discord, Viber, Browser
+    wl-copy --type image/png < "$FILENAME" 2>/dev/null || true
+    
+    # Desktop notification
+    notify-send -i "$FILENAME" "📸 Скриншот скопирован в буфер!" "$FILENAME" 2>/dev/null || true
+fi

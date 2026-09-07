@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""
+fetch - Dynamic Live Steampunk Fastfetch
+Continuously updates system stats and media track dynamically in real-time.
+"""
+
+import sys
+import os
+import time
+import signal
+import select
+import termios
+import tty
+import subprocess
+
+CONFIG_PATH = os.path.expanduser("~/.config/fastfetch/config.jsonc")
+
+def run_once(args):
+    cmd = ["fastfetch"]
+    if os.path.exists(CONFIG_PATH):
+        cmd.extend(["-c", CONFIG_PATH])
+    cmd.extend(args)
+    sys.exit(subprocess.call(cmd))
+
+def main():
+    args = sys.argv[1:]
+    if "--once" in args or "-1" in args or "--static" in args or "-h" in args or "--help" in args:
+        args = [a for a in args if a not in ["--once", "-1", "--static"]]
+        run_once(args)
+
+    if not sys.stdin.isatty():
+        run_once(args)
+
+    # Save terminal settings
+    old_settings = termios.tcgetattr(sys.stdin)
+    
+    # Fastfetch watch command
+    cmd = ["fastfetch"]
+    if os.path.exists(CONFIG_PATH):
+        cmd.extend(["-c", CONFIG_PATH])
+    cmd.extend(["-w", "1"])
+    cmd.extend(args)
+
+    proc = None
+    try:
+        tty.setcbreak(sys.stdin.fileno())
+        # Launch fastfetch in watch mode
+        proc = subprocess.Popen(cmd)
+
+        while True:
+            # Check if fastfetch died
+            if proc.poll() is not None:
+                break
+
+            # Check for key presses
+            r, _, _ = select.select([sys.stdin], [], [], 0.2)
+            if r:
+                ch = sys.stdin.read(1)
+                if ch in ['q', 'Q', '\x1b', '\x03']:  # q, Esc, Ctrl+C
+                    break
+                elif ch == ' ':
+                    subprocess.run(['playerctl', 'play-pause'], stderr=subprocess.DEVNULL)
+                elif ch in ['n', 'N']:
+                    subprocess.run(['playerctl', 'next'], stderr=subprocess.DEVNULL)
+                elif ch in ['p', 'P']:
+                    subprocess.run(['playerctl', 'previous'], stderr=subprocess.DEVNULL)
+    finally:
+        if proc and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+        # Clear line and reset cursor
+        sys.stdout.write("\033[?25h\n")
+        sys.stdout.flush()
+
+if __name__ == "__main__":
+    main()

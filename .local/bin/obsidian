@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+ELECTRON_FLAGS=(
+    "--enable-features=UseOzonePlatform"
+    "--ozone-platform=wayland"
+    "--disable-gpu-sandbox"
+)
+
+if [ $# -eq 0 ]; then
+    exec /home/ym1co/.local/lib/obsidian/obsidian "${ELECTRON_FLAGS[@]}" "/home/ym1co/Vault"
+else
+    exec /home/ym1co/.local/lib/obsidian/obsidian "${ELECTRON_FLAGS[@]}" "$@"
+fi

@@ -1,0 +1,385 @@
+#!/usr/bin/env python3
+"""
+Roblox Anti-AFK for Linux / Niri / Wayland / XWayland (Sober)
+Periodically presses W, S, A, D (and optional Space) in Roblox without stealing focus or teleporting.
+Uses X11 XSendEvent directly to Sober's window, keeping your current workspace and window completely undisturbed.
+"""
+
+import sys
+import time
+import json
+import random
+import signal
+import argparse
+import subprocess
+import ctypes
+from datetime import datetime
+from ctypes import c_void_p, c_ulong, c_int, c_uint, c_char_p, Structure, byref, POINTER
+
+# Опциональный uinput
+try:
+    import evdev
+    from evdev import UInput, ecodes as e
+    HAVE_UINPUT = True
+except ImportError:
+    HAVE_UINPUT = False
+
+# X11 структуры
+class XKeyEvent(Structure):
+    _fields_ = [
+        ("type", c_int),
+        ("serial", c_ulong),
+        ("send_event", c_int),
+        ("display", c_void_p),
+        ("window", c_ulong),
+        ("root", c_ulong),
+        ("subwindow", c_ulong),
+        ("time", c_ulong),
+        ("x", c_int),
+        ("y", c_int),
+        ("x_root", c_int),
+        ("y_root", c_int),
+        ("state", c_uint),
+        ("keycode", c_uint),
+        ("same_screen", c_int),
+    ]
+
+class XClassHint(Structure):
+    _fields_ = [
+        ("res_name", c_char_p),
+        ("res_class", c_char_p),
+    ]
+
+class X11InputSender:
+    def __init__(self):
+        try:
+            self.x11 = ctypes.CDLL("libX11.so.6")
+            self._setup_bindings()
+            self.disp = self.x11.XOpenDisplay(None)
+            self.root = self.x11.XDefaultRootWindow(self.disp) if self.disp else None
+        except Exception:
+            self.x11 = None
+            self.disp = None
+            self.root = None
+
+    def _setup_bindings(self):
+        self.x11.XOpenDisplay.argtypes = [c_char_p]
+        self.x11.XOpenDisplay.restype = c_void_p
+        self.x11.XCloseDisplay.argtypes = [c_void_p]
+        self.x11.XCloseDisplay.restype = c_int
+        self.x11.XDefaultRootWindow.argtypes = [c_void_p]
+        self.x11.XDefaultRootWindow.restype = c_ulong
+        self.x11.XQueryTree.argtypes = [c_void_p, c_ulong, POINTER(c_ulong), POINTER(c_ulong), POINTER(POINTER(c_ulong)), POINTER(c_uint)]
+        self.x11.XQueryTree.restype = c_int
+        self.x11.XGetClassHint.argtypes = [c_void_p, c_ulong, POINTER(XClassHint)]
+        self.x11.XGetClassHint.restype = c_int
+        self.x11.XFree.argtypes = [c_void_p]
+        self.x11.XFree.restype = c_int
+        self.x11.XStringToKeysym.argtypes = [c_char_p]
+        self.x11.XStringToKeysym.restype = c_ulong
+        self.x11.XKeysymToKeycode.argtypes = [c_void_p, c_ulong]
+        self.x11.XKeysymToKeycode.restype = ctypes.c_ubyte
+        self.x11.XSendEvent.argtypes = [c_void_p, c_ulong, c_int, ctypes.c_long, c_void_p]
+        self.x11.XSendEvent.restype = c_int
+        self.x11.XFlush.argtypes = [c_void_p]
+        self.x11.XFlush.restype = c_int
+
+    def is_available(self):
+        return bool(self.disp and self.root)
+
+    def find_sober_window(self):
+        if not self.is_available():
+            return None
+        root_r = c_ulong()
+        parent_r = c_ulong()
+        children_r = POINTER(c_ulong)()
+        nchildren_r = c_uint()
+        status = self.x11.XQueryTree(self.disp, self.root, byref(root_r), byref(parent_r), byref(children_r), byref(nchildren_r))
+        if not status or not children_r:
+            return None
+        sober_win = None
+        hint = XClassHint()
+        for i in range(nchildren_r.value):
+            wid = children_r[i]
+            if self.x11.XGetClassHint(self.disp, wid, byref(hint)):
+                name = (hint.res_name.decode("utf-8", errors="ignore") if hint.res_name else "").lower()
+                cls = (hint.res_class.decode("utf-8", errors="ignore") if hint.res_class else "").lower()
+                if "sober" in name or "sober" in cls or "roblox" in name or "roblox" in cls:
+                    sober_win = wid
+                    break
+        if children_r:
+            self.x11.XFree(children_r)
+        return sober_win
+
+    def tap_key(self, win, key_name, press_time=0.12):
+        if not self.is_available() or not win:
+            return False
+        sym = self.x11.XStringToKeysym(key_name.encode())
+        code = self.x11.XKeysymToKeycode(self.disp, sym)
+        if not code:
+            return False
+
+        ev = XKeyEvent()
+        ev.type = 2  # KeyPress
+        ev.send_event = 1
+        ev.display = self.disp
+        ev.window = win
+        ev.root = self.root
+        ev.keycode = code
+        ev.same_screen = 1
+
+        # KeyPressMask = 1
+        self.x11.XSendEvent(self.disp, win, 1, 1, byref(ev))
+        self.x11.XFlush(self.disp)
+        time.sleep(press_time)
+
+        # KeyReleaseMask = 2
+        ev.type = 3  # KeyRelease
+        self.x11.XSendEvent(self.disp, win, 1, 2, byref(ev))
+        self.x11.XFlush(self.disp)
+        return True
+
+    def close(self):
+        if self.disp:
+            try:
+                self.x11.XCloseDisplay(self.disp)
+            except Exception:
+                pass
+            self.disp = None
+
+
+RUNNING = True
+
+def handle_signal(sig, frame):
+    global RUNNING
+    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Остановка Anti-AFK...")
+    RUNNING = False
+
+signal.signal(signal.SIGINT, handle_signal)
+signal.signal(signal.SIGTERM, handle_signal)
+
+def get_niri_windows():
+    try:
+        out = subprocess.check_output(['niri', 'msg', '--json', 'windows'], text=True, stderr=subprocess.DEVNULL)
+        return json.loads(out)
+    except Exception:
+        return []
+
+def get_niri_focused_window():
+    try:
+        out = subprocess.check_output(['niri', 'msg', '--json', 'focused-window'], text=True, stderr=subprocess.DEVNULL)
+        return json.loads(out)
+    except Exception:
+        return None
+
+def find_roblox_niri_window(windows=None):
+    if windows is None:
+        windows = get_niri_windows()
+    for w in windows:
+        app_id = (w.get('app_id') or '').lower()
+        title = (w.get('title') or '').lower()
+        if 'sober' in app_id or 'roblox' in app_id or 'sober' in title or 'roblox' in title:
+            return w
+    return None
+
+def uinput_tap_key(ui, key_code, press_time=0.14):
+    if not ui:
+        return
+    ui.write(e.EV_KEY, key_code, 1)
+    ui.syn()
+    time.sleep(press_time)
+    ui.write(e.EV_KEY, key_code, 0)
+    ui.syn()
+
+def perform_wasd_routine(x11_sender, x11_win, ui=None, is_focused=False, jump=False):
+    """
+    Выполняет W -> S (вперед-назад) и A -> D (влево-вправо).
+    Если окно не в фокусе, отправляет строго в X11 окно Sober без переключения фокуса!
+    """
+    if x11_sender and x11_win:
+        # W -> S
+        x11_sender.tap_key(x11_win, "w", random.uniform(0.12, 0.18))
+        time.sleep(random.uniform(0.06, 0.10))
+        x11_sender.tap_key(x11_win, "s", random.uniform(0.12, 0.18))
+        time.sleep(random.uniform(0.06, 0.10))
+        
+        # A -> D
+        x11_sender.tap_key(x11_win, "a", random.uniform(0.12, 0.18))
+        time.sleep(random.uniform(0.06, 0.10))
+        x11_sender.tap_key(x11_win, "d", random.uniform(0.12, 0.18))
+        
+        if jump:
+            time.sleep(random.uniform(0.06, 0.10))
+            x11_sender.tap_key(x11_win, "space", random.uniform(0.08, 0.12))
+    elif ui and is_focused:
+        uinput_tap_key(ui, e.KEY_W, random.uniform(0.12, 0.18))
+        time.sleep(random.uniform(0.06, 0.10))
+        uinput_tap_key(ui, e.KEY_S, random.uniform(0.12, 0.18))
+        time.sleep(random.uniform(0.06, 0.10))
+        uinput_tap_key(ui, e.KEY_A, random.uniform(0.12, 0.18))
+        time.sleep(random.uniform(0.06, 0.10))
+        uinput_tap_key(ui, e.KEY_D, random.uniform(0.12, 0.18))
+        if jump:
+            time.sleep(random.uniform(0.06, 0.10))
+            uinput_tap_key(ui, e.KEY_SPACE, random.uniform(0.08, 0.12))
+
+def notify(msg):
+    try:
+        subprocess.run(['notify-send', '-a', 'Roblox Anti-AFK', 'Roblox Anti-AFK', msg], check=False)
+    except Exception:
+        pass
+
+def parse_time_duration(val):
+    if val is None:
+        return 150
+    if isinstance(val, (int, float)):
+        return int(val)
+    s = str(val).strip().lower()
+    try:
+        if s.endswith('m') or s.endswith('мин'):
+            clean = s.rstrip('mин')
+            return int(float(clean) * 60)
+        elif s.endswith('s') or s.endswith('сек') or s.endswith('с'):
+            clean = s.rstrip('sекс')
+            return int(float(clean))
+        elif s.endswith('h') or s.endswith('ч'):
+            clean = s.rstrip('hч')
+            return int(float(clean) * 3600)
+        else:
+            return int(float(s))
+    except Exception:
+        raise argparse.ArgumentTypeError(f"Некорректный формат времени: '{val}'. Пример: 5m, 150s, 300")
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Roblox Anti-AFK для Linux (Niri / Sober). Нажимает W, A, S, D раз в несколько минут без переключения фокуса и без рывков экрана."
+    )
+    parser.add_argument(
+        '-i', '--interval', '-interval',
+        type=parse_time_duration,
+        default=150,
+        help="Базовый интервал (например: 5m, 150s, 300; по умолчанию: 150 сек / 2.5 мин)"
+    )
+    parser.add_argument(
+        '-r', '--random', '-random',
+        type=parse_time_duration,
+        default=30,
+        help="Случайный разброс времени (например: 30s, 1m; по умолчанию: 30 сек)"
+    )
+    parser.add_argument(
+        '-b', '--bg', '-bg', '--background', '-background',
+        dest='allow_bg',
+        action='store_true',
+        help="Фоновый режим (по умолчанию включен бесшумный фоновый ввод без телепортации окон)"
+    )
+    parser.add_argument(
+        '-j', '--jump', '-jump',
+        action='store_true',
+        help="Также нажимать Пробел (прыжок)"
+    )
+    parser.add_argument(
+        '-t', '--test', '-test',
+        action='store_true',
+        help="Выполнить один тестовый цикл прямо сейчас и завершить работу"
+    )
+    parser.add_argument(
+        '-n', '--notify', '-notify',
+        action='store_true',
+        help="Показывать всплывающее уведомление при каждом цикле Anti-AFK"
+    )
+
+    args = parser.parse_args()
+
+    # Инициализируем X11 Sender для фонового ввода без переключения окон
+    x11_sender = X11InputSender()
+    if not x11_sender.is_available():
+        print("[!] Внимание: X11 дисплей недоступен. Фоновый ввод может требовать активного окна.")
+
+    # Инициализация виртуальной клавиатуры (uinput) как запасного варианта
+    ui = None
+    if HAVE_UINPUT:
+        try:
+            capabilities = {
+                e.EV_KEY: [e.KEY_W, e.KEY_A, e.KEY_S, e.KEY_D, e.KEY_SPACE]
+            }
+            ui = UInput(capabilities, name='Roblox-AntiAFK-Virtual')
+        except Exception:
+            ui = None
+
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎮 Roblox Anti-AFK запущен!")
+    print("  Режим: Бесшумный фоновый ввод (БЕЗ переключения экранов и телепортации фокуса)")
+    print(f"  Интервал: ~{args.interval // 60} мин {args.interval % 60} сек (разброс ±{args.random} сек)")
+    if args.jump:
+        print("  Прыжок (Пробел): ВКЛ")
+
+    # Тестовый запуск
+    if args.test:
+        roblox_niri = find_roblox_niri_window()
+        sober_x11 = x11_sender.find_sober_window()
+        
+        if not roblox_niri and not sober_x11:
+            print("[-] Окно Roblox (Sober) не найдено!")
+            if ui: ui.close()
+            x11_sender.close()
+            return
+        
+        cur = get_niri_focused_window()
+        is_focused = cur and roblox_niri and cur.get('id') == roblox_niri.get('id')
+        
+        print(f"[*] Выполняем тестовое нажатие WASD (Фокус Roblox: {'ДА' if is_focused else 'НЕТ (в фоне)'})...")
+        perform_wasd_routine(x11_sender, sober_x11, ui=ui, is_focused=is_focused, jump=args.jump)
+        print("[+] Тест успешно выполнен! Окна и фокус НЕ перемещались.")
+        if ui: ui.close()
+        x11_sender.close()
+        return
+
+    # Основной цикл
+    try:
+        while RUNNING:
+            roblox_niri = find_roblox_niri_window()
+            sober_x11 = x11_sender.find_sober_window()
+
+            if not roblox_niri and not sober_x11:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [⏳] Roblox (Sober) не запущен. Ожидание...")
+                for _ in range(10):
+                    if not RUNNING:
+                        break
+                    time.sleep(1)
+                continue
+
+            cur_focus = get_niri_focused_window()
+            is_roblox_focused = (
+                cur_focus and roblox_niri and cur_focus.get('id') == roblox_niri.get('id')
+            )
+
+            if is_roblox_focused:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [🕹️] Роблокс в фокусе. Нажимаем W -> S -> A -> D...")
+                perform_wasd_routine(x11_sender, sober_x11, ui=ui, is_focused=True, jump=args.jump)
+                if args.notify:
+                    notify("Anti-AFK: клавиши WASD нажаты!")
+            else:
+                # Тихо отправляем в окно Sober без переключения окон
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [🔄] Роблокс в фоне. Отправка WASD напрямую в окно Sober (без переключения экранов)...")
+                perform_wasd_routine(x11_sender, sober_x11, ui=ui, is_focused=False, jump=args.jump)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [✅] Нажатия выполнены в фоне. Ваш текущий экран не прерывался.")
+                if args.notify:
+                    notify("Anti-AFK: фоновые клавиши WASD успешно отправлены!")
+
+            # Вычисляем время до следующего цикла со случайным разбросом
+            jitter = random.randint(-args.random, args.random)
+            sleep_time = max(30, args.interval + jitter)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Следующее действие через {sleep_time // 60} мин {sleep_time % 60} сек.\n")
+
+            for _ in range(sleep_time):
+                if not RUNNING:
+                    break
+                time.sleep(1)
+
+    finally:
+        if ui:
+            ui.close()
+        x11_sender.close()
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Anti-AFK завершен. Пока!")
+
+if __name__ == '__main__':
+    main()

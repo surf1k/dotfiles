@@ -1,0 +1,697 @@
+#!/usr/bin/env python3
+import sys
+import os
+
+# Rock-solid OpenGL renderer for GTK4 on Wayland
+os.environ["GSK_RENDERER"] = "gl"
+
+# Ensure WAYLAND_DISPLAY is set when launched from systemd service
+if "WAYLAND_DISPLAY" not in os.environ:
+    import glob
+    socks = sorted(glob.glob(f"/run/user/{os.getuid()}/wayland-*"), key=os.path.getmtime, reverse=True)
+    socks = [s for s in socks if not s.endswith(".lock")]
+    if socks:
+        os.environ["WAYLAND_DISPLAY"] = os.path.basename(socks[0])
+
+import json
+import time
+import random
+import fcntl
+import urllib.parse
+import subprocess
+import gi
+
+gi.require_version('Gtk', '4.0')
+from gi.repository import Gtk, Gdk, GLib
+
+CONFIG_DIR = os.path.expanduser("~/.config/study-daemon")
+CURRICULUM_FILE = os.path.join(CONFIG_DIR, "curriculum.json")
+PROGRESS_FILE = os.path.join(CONFIG_DIR, "progress.json")
+
+THINKING_TIME_MATH = 15
+WRONG_ANSWER_PENALTY = 90
+
+if CONFIG_DIR not in sys.path:
+    sys.path.insert(0, CONFIG_DIR)
+
+try:
+    from task_generator import ProceduralTaskGenerator
+except Exception:
+    ProceduralTaskGenerator = None
+
+try:
+    from analytics import AnalyticsTracker
+except Exception:
+    AnalyticsTracker = None
+
+def ensure_single_popup_instance():
+    global lock_file_popup
+    lock_file_popup = open("/tmp/study-popup.lock", "w")
+    try:
+        fcntl.flock(lock_file_popup, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except IOError:
+        print("study-popup is already open. Skipping duplicate.")
+        sys.exit(0)
+
+def escape_text(text):
+    return GLib.markup_escape_text(str(text))
+
+def get_current_focused_workspace():
+    try:
+        res = subprocess.run(["niri", "msg", "-j", "workspaces"], capture_output=True, text=True, timeout=1.5)
+        if res.returncode == 0:
+            workspaces = json.loads(res.stdout)
+            for ws in workspaces:
+                if ws.get("is_focused"):
+                    return ws.get("id") or ws.get("idx")
+    except Exception:
+        pass
+    return None
+
+def switch_to_study_workspace():
+    try:
+        # 1. Switch HDMI-A-1 (Monitor 2) to 'notes' workspace
+        subprocess.run(["niri", "msg", "action", "focus-monitor", "HDMI-A-1"], stderr=subprocess.DEVNULL)
+        subprocess.run(["niri", "msg", "action", "focus-workspace", "notes"], stderr=subprocess.DEVNULL)
+        
+        # 2. Switch DP-1 (Monitor 1) to 'study' workspace
+        subprocess.run(["niri", "msg", "action", "focus-monitor", "DP-1"], stderr=subprocess.DEVNULL)
+        subprocess.run(["niri", "msg", "action", "focus-workspace", "study"], stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+def restore_previous_workspace(ws_id):
+    if ws_id is not None:
+        try:
+            subprocess.run(["niri", "msg", "action", "focus-monitor", "DP-1"], stderr=subprocess.DEVNULL)
+            subprocess.run(["niri", "msg", "action", "focus-workspace", str(ws_id)], stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+def open_obsidian_note(vault_rel_path):
+    if not vault_rel_path:
+        return
+    try:
+        encoded = urllib.parse.quote(vault_rel_path)
+        uri = f"obsidian://open?vault=intensive-study-vault&file={encoded}"
+        subprocess.Popen(["/home/ym1co/.local/bin/obsidian", uri], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+def close_study_helpers():
+    try:
+        subprocess.run(["pkill", "-15", "-f", "obsidian"], stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+def trigger_ambient_music():
+    try:
+        res = subprocess.run(["playerctl", "--player=ytmdesktop", "play"], capture_output=True, text=True, timeout=1)
+        if res.returncode != 0:
+            subprocess.Popen(["flatpak", "run", "app.ytmdesktop.ytmdesktop"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+def load_data():
+    if not os.path.exists(CURRICULUM_FILE):
+        return [], {}
+    with open(CURRICULUM_FILE, "r", encoding="utf-8") as f:
+        curriculum = json.load(f)
+    
+    progress = {}
+    if os.path.exists(PROGRESS_FILE):
+        try:
+            with open(PROGRESS_FILE, "r", encoding="utf-8") as f:
+                progress = json.load(f)
+        except Exception:
+            progress = {}
+    return curriculum, progress
+
+def save_progress(progress):
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(PROGRESS_FILE, "w", encoding="utf-8") as f:
+        json.dump(progress, f, ensure_ascii=False, indent=2)
+
+def select_task(curriculum, progress):
+    now = time.time()
+    DAY_WINDOW = 20 * 3600  # Cooldown: tasks/topics cannot repeat within 20 hours (max 1 per day)
+    
+    # 1. Collect all topics and task IDs reviewed today
+    reviewed_today_ids = set()
+    reviewed_today_topics = set()
+    recent_subjects = []
+
+    id_to_topic = {q["id"]: q.get("topic", "") for q in curriculum}
+
+    sorted_prog = sorted(progress.items(), key=lambda x: x[1].get("last_reviewed", 0), reverse=True)
+    for tid, p in sorted_prog:
+        last_rev = p.get("last_reviewed", 0)
+        if (now - last_rev) < DAY_WINDOW:
+            reviewed_today_ids.add(tid)
+            topic = p.get("topic") or id_to_topic.get(tid)
+            if topic:
+                reviewed_today_topics.add(topic)
+        if len(recent_subjects) < 3 and "subject" in p:
+            recent_subjects.append(p["subject"])
+
+    # 2. Candidate procedural task types (only those NOT reviewed today)
+    available_proc_ids = []
+    if ProceduralTaskGenerator:
+        available_proc_ids = [t for t in ProceduralTaskGenerator.TASK_TYPES if t not in reviewed_today_ids]
+
+    # 3. Candidate curriculum questions (strictly NOT reviewed today and topic NOT reviewed today)
+    curriculum_candidates = [
+        q for q in curriculum
+        if q["id"] not in reviewed_today_ids and q.get("topic") not in reviewed_today_topics
+    ]
+
+    # If all questions have been reviewed today (rare), fallback to spaced-repetition due
+    if not curriculum_candidates and not available_proc_ids:
+        curriculum_candidates = [q for q in curriculum if progress.get(q["id"], {}).get("next_review", 0) <= now]
+        if not curriculum_candidates:
+            curriculum_candidates = curriculum
+
+    # 4. Fair Selection: 25% chance for a procedural task (if an unreviewed type is available), 75% for diverse curriculum
+    if available_proc_ids and random.random() < 0.25:
+        chosen_id = random.choice(available_proc_ids)
+        task = ProceduralTaskGenerator.get_task_by_id(chosen_id)
+        if task:
+            return task, 2
+
+    # 5. Prioritize subjects that were NOT the last subject asked (subject rotation)
+    if curriculum_candidates:
+        non_recent = [q for q in curriculum_candidates if q.get("subject") not in recent_subjects[:1]]
+        pool = non_recent if non_recent else curriculum_candidates
+        q = random.choice(pool)
+        return q, q.get("phase", 1)
+
+    if available_proc_ids:
+        chosen_id = random.choice(available_proc_ids)
+        return ProceduralTaskGenerator.get_task_by_id(chosen_id), 2
+
+    return random.choice(curriculum), 1
+
+CSS_STR = """
+window {
+    background-color: #0c140e;
+    color: #dce7cf;
+    font-family: 'Nunito', 'Inter', sans-serif;
+}
+
+.card-box {
+    background-color: #122016;
+    border: 2px solid rgba(222, 192, 126, 0.45);
+    border-radius: 22px;
+    padding: 26px 30px;
+    margin: 6px;
+}
+
+.badge-subject {
+    background-color: #1d3623;
+    color: #dec07e;
+    font-size: 14.5px;
+    font-weight: 800;
+    border-radius: 10px;
+    padding: 7px 16px;
+    border: 1px solid rgba(222, 192, 126, 0.4);
+}
+
+.badge-phase {
+    background-color: #1a323c;
+    color: #8ed6cd;
+    font-size: 13.5px;
+    font-weight: 700;
+    border-radius: 10px;
+    padding: 7px 14px;
+    border: 1px solid rgba(142, 214, 205, 0.4);
+}
+
+.badge-streak {
+    background-color: #422a18;
+    color: #fed594;
+    font-size: 13.5px;
+    font-weight: 800;
+    border-radius: 10px;
+    padding: 7px 14px;
+    border: 1px solid rgba(254, 213, 148, 0.4);
+}
+
+.paper-warning-box {
+    background-color: #2d2011;
+    border: 2px dashed rgba(222, 192, 126, 0.65);
+    border-radius: 14px;
+    padding: 12px 18px;
+    margin-top: 12px;
+    margin-bottom: 12px;
+}
+
+.paper-warning-box label {
+    color: #fed594;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.guide-box {
+    background-color: #162a1c;
+    border-left: 5px solid #78c45d;
+    border-radius: 12px;
+    padding: 14px 18px;
+    margin-top: 10px;
+    margin-bottom: 12px;
+}
+
+.guide-box label {
+    color: #c4ebb4;
+    font-size: 15.5px;
+    line-height: 1.55;
+}
+
+.example-box {
+    background-color: #1a2f22;
+    border: 1px solid rgba(120, 196, 93, 0.4);
+    border-radius: 14px;
+    padding: 14px 18px;
+    margin-top: 10px;
+    margin-bottom: 12px;
+}
+
+.example-box label {
+    color: #dbf6e3;
+    font-size: 15.5px;
+    line-height: 1.55;
+}
+
+.timer-box {
+    background-color: #351f14;
+    border: 1px solid #d4574a;
+    border-radius: 12px;
+    padding: 10px 18px;
+    margin-top: 10px;
+    margin-bottom: 12px;
+}
+
+.timer-box label {
+    color: #ffb0a2;
+    font-size: 14.5px;
+    font-weight: 800;
+}
+
+.question-text {
+    font-family: 'Nunito', 'Inter', sans-serif;
+    font-size: 19px;
+    font-weight: 800;
+    color: #ffffff;
+    margin-top: 12px;
+    margin-bottom: 18px;
+    line-height: 1.5;
+}
+
+button.option-btn {
+    background-color: #182e1f;
+    background-image: none;
+    border: 2px solid rgba(90, 130, 95, 0.6);
+    border-radius: 16px;
+    padding: 15px 22px;
+    margin-bottom: 10px;
+    box-shadow: none;
+}
+
+button.option-btn label {
+    font-family: 'Nunito', 'Inter', sans-serif;
+    color: #dce7cf;
+    font-size: 16.5px;
+    font-weight: 700;
+}
+
+button.option-btn:hover {
+    background-color: #24462e;
+    border-color: #78c45d;
+}
+
+button.option-btn:hover label {
+    color: #ffffff;
+}
+
+button.option-btn:disabled {
+    opacity: 0.85;
+}
+
+button.option-btn:disabled label {
+    color: #b5c7ad;
+}
+
+button.option-correct, button.option-correct:disabled {
+    background-color: #1e5a2b;
+    border: 2px solid #78c45d;
+    opacity: 1.0;
+}
+
+button.option-correct label, button.option-correct:disabled label {
+    color: #ffffff;
+    font-weight: 800;
+}
+
+button.option-wrong, button.option-wrong:disabled {
+    background-color: #631e1e;
+    border: 2px solid #d4574a;
+    opacity: 1.0;
+}
+
+button.option-wrong label, button.option-wrong:disabled label {
+    color: #ffcccc;
+    font-weight: 800;
+}
+
+.explanation-box {
+    background-color: #0e1a10;
+    border-left: 5px solid #dec07e;
+    border-radius: 12px;
+    padding: 16px;
+    margin-top: 14px;
+    font-size: 16px;
+}
+
+.explanation-box label {
+    color: #d4e3c5;
+    font-size: 16px;
+    line-height: 1.6;
+}
+
+button.continue-btn {
+    background-color: #78c45d;
+    background-image: none;
+    border: 2px solid #78c45d;
+    border-radius: 14px;
+    padding: 14px 34px;
+    margin-top: 14px;
+}
+
+button.continue-btn label {
+    color: #0c140e;
+    font-size: 16px;
+    font-weight: 900;
+}
+
+button.continue-btn:hover {
+    background-color: #96e077;
+    border-color: #96e077;
+}
+"""
+
+class StudyApp(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id="dev.ym1co.study.quiz")
+        self.window = None
+
+    def do_activate(self):
+        curriculum, progress = load_data()
+        if not curriculum:
+            print("Curriculum empty!")
+            self.quit()
+            return
+            
+        task, phase = select_task(curriculum, progress)
+        self.task = task
+        self.progress = progress
+        self.answered_correctly = False
+        self.disabled_wrong_indices = set()
+        self.question_start_time = time.time()
+
+        # 1. Рабочий стол
+        self.prev_workspace = get_current_focused_workspace()
+        switch_to_study_workspace()
+
+        # 2. Авто-открытие темы в Obsidian и запуск YouTube Music на 2-м экране
+        vault_note = task.get("vault_file")
+        if vault_note:
+            open_obsidian_note(vault_note)
+        trigger_ambient_music()
+
+        # 3. GUI Окно (Аккуратное плавающее окно)
+        self.window = Gtk.ApplicationWindow(application=self)
+        self.window.set_title("⚡ Обучающий Чекпоинт Знаний (Школьная программа)")
+        self.window.set_default_size(800, 680)
+        self.window.set_modal(True)
+        self.window.set_resizable(False)
+
+        self.window.connect("close-request", self.on_close_request)
+
+        key_controller = Gtk.EventControllerKey.new()
+        key_controller.connect("key-pressed", self.on_key_pressed)
+        self.window.add_controller(key_controller)
+
+        provider = Gtk.CssProvider()
+        provider.load_from_data(CSS_STR.encode("utf-8"))
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(),
+            provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        main_box.add_css_class("card-box")
+
+        # 1. Header Badges
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        
+        subj = task.get("subject", "Школьная программа")
+        subj_badge = Gtk.Label(label=subj)
+        subj_badge.add_css_class("badge-subject")
+        
+        topic_text = task.get("topic", "")
+        topic_badge = Gtk.Label(label=f"📖 {topic_text}")
+        topic_badge.add_css_class("badge-phase")
+        
+        tid = task["id"]
+        streak = self.progress.get(tid, {}).get("streak", 0)
+        streak_badge = Gtk.Label(label=f"🔥 Серия: {streak}")
+        streak_badge.add_css_class("badge-streak")
+
+        header_box.append(subj_badge)
+        header_box.append(topic_badge)
+        header_box.append(streak_badge)
+        main_box.append(header_box)
+
+        # 2. Баннер протокола черновика
+        paper_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        paper_box.add_css_class("paper-warning-box")
+        paper_label = Gtk.Label()
+        paper_label.set_markup("✍️ <b>ПРОТОКОЛ ЧЕРНОВИКА:</b> Конспект темы открыт в Obsidian на 2-м экране! Вдумайся и реши на листке.")
+        paper_label.set_wrap(True)
+        paper_label.set_xalign(0.0)
+        paper_box.append(paper_label)
+        main_box.append(paper_box)
+
+        # 3. Экспресс-гайд (Только теория и формулы)
+        theory_text = task.get("theory_guide", "")
+        if theory_text:
+            guide_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            guide_box.add_css_class("guide-box")
+            guide_title = Gtk.Label()
+            guide_title.set_markup(f"<b>💡 Экспресс-гайд по теме «{escape_text(topic_text)}»:</b>")
+            guide_title.set_xalign(0.0)
+            
+            guide_label = Gtk.Label(label=theory_text)
+            guide_label.set_wrap(True)
+            guide_label.set_xalign(0.0)
+            
+            guide_box.append(guide_title)
+            guide_box.append(guide_label)
+            main_box.append(guide_box)
+
+        # 4. Разобранный пример
+        solved_sample = task.get("solved_example")
+        if solved_sample:
+            ex_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            ex_box.add_css_class("example-box")
+            ex_title = Gtk.Label()
+            ex_title.set_markup("<b>📝 Разобранный аналогичный пример:</b>")
+            ex_title.set_xalign(0.0)
+            
+            ex_label = Gtk.Label(label=solved_sample)
+            ex_label.set_wrap(True)
+            ex_label.set_xalign(0.0)
+            
+            ex_box.append(ex_title)
+            ex_box.append(ex_label)
+            main_box.append(ex_box)
+
+        # 5. Текст задания
+        q_text = task.get("question", task.get("description", ""))
+        q_label = Gtk.Label(label=q_text)
+        q_label.set_wrap(True)
+        q_label.set_xalign(0.0)
+        q_label.add_css_class("question-text")
+        main_box.append(q_label)
+
+        # 6. Таймер размышления
+        self.timer_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.timer_box.add_css_class("timer-box")
+        self.timer_label = Gtk.Label()
+        self.timer_label.set_xalign(0.0)
+        self.timer_box.append(self.timer_label)
+        main_box.append(self.timer_box)
+
+        # 7. Варианты ответов
+        self.option_buttons = []
+        letters = ["A", "B", "C", "D"]
+        for idx, opt_text in enumerate(task.get("options", [])):
+            btn = Gtk.Button()
+            btn.add_css_class("option-btn")
+            btn.set_sensitive(False)
+            
+            lbl = Gtk.Label(label=f"{letters[idx]}.  {opt_text}")
+            lbl.set_xalign(0.0)
+            lbl.set_wrap(True)
+            btn.set_child(lbl)
+            
+            btn.connect("clicked", self.on_option_clicked, idx)
+            main_box.append(btn)
+            self.option_buttons.append(btn)
+
+        # 8. Блок обратной связи
+        self.feedback_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.feedback_box.add_css_class("explanation-box")
+        self.feedback_box.set_visible(False)
+        
+        self.feedback_title = Gtk.Label()
+        self.feedback_title.set_xalign(0.0)
+        self.feedback_label = Gtk.Label()
+        self.feedback_label.set_wrap(True)
+        self.feedback_label.set_xalign(0.0)
+        
+        self.feedback_box.append(self.feedback_title)
+        self.feedback_box.append(self.feedback_label)
+        main_box.append(self.feedback_box)
+
+        # 9. Кнопка продолжить
+        self.continue_btn = Gtk.Button(label="Продолжить →")
+        self.continue_btn.add_css_class("continue-btn")
+        self.continue_btn.set_visible(False)
+        self.continue_btn.connect("clicked", self.on_continue_clicked)
+        main_box.append(self.continue_btn)
+
+        scroller.set_child(main_box)
+        self.window.set_child(scroller)
+        self.window.present()
+
+        self.start_countdown(THINKING_TIME_MATH, "⏳ Вдумайся и реши на листке. Кнопки разблокируются через", self.unlock_options)
+
+    def start_countdown(self, seconds, prefix_text, on_finish_callback):
+        self.remaining_seconds = seconds
+        self.countdown_prefix = prefix_text
+        self.countdown_callback = on_finish_callback
+        self.timer_box.set_visible(True)
+        self.update_timer_label()
+        self.timer_source_id = GLib.timeout_add_seconds(1, self.on_timer_tick)
+
+    def update_timer_label(self):
+        mins = self.remaining_seconds // 60
+        secs = self.remaining_seconds % 60
+        time_str = f"{mins}:{secs:02d}" if mins > 0 else f"{secs} сек"
+        self.timer_label.set_markup(f"<b>{escape_text(self.countdown_prefix)} {time_str}...</b>")
+
+    def on_timer_tick(self):
+        self.remaining_seconds -= 1
+        if self.remaining_seconds <= 0:
+            self.timer_box.set_visible(False)
+            if self.countdown_callback:
+                self.countdown_callback()
+            return False
+        self.update_timer_label()
+        return True
+
+    def unlock_options(self):
+        if not hasattr(self, "option_buttons"):
+            return
+        for idx, btn in enumerate(self.option_buttons):
+            if idx not in self.disabled_wrong_indices:
+                btn.set_sensitive(True)
+
+    def on_close_request(self, window):
+        if not self.answered_correctly:
+            return True
+        close_study_helpers()
+        restore_previous_workspace(self.prev_workspace)
+        return False
+
+    def on_key_pressed(self, controller, keyval, keycode, state):
+        if keyval == Gdk.KEY_Escape and not self.answered_correctly:
+            return True
+        return False
+
+    def on_option_clicked(self, button, chosen_idx):
+        correct_idx = self.task.get("correct_index", 0)
+        tid = self.task["id"]
+        is_correct = (chosen_idx == correct_idx)
+        elapsed = round(time.time() - getattr(self, "question_start_time", time.time()), 1)
+        
+        if AnalyticsTracker:
+            AnalyticsTracker.record_answer(
+                task_id=tid,
+                subject=self.task.get("subject"),
+                topic=self.task.get("topic"),
+                is_correct=is_correct,
+                time_spent=elapsed,
+                session_type="checkpoint"
+            )
+
+        for btn in self.option_buttons:
+            btn.set_sensitive(False)
+
+        if chosen_idx == correct_idx:
+            self.answered_correctly = True
+            button.add_css_class("option-correct")
+            
+            p = self.progress.get(tid, {"streak": 0, "reviews": 0})
+            p["reviews"] = p.get("reviews", 0) + 1
+            p["streak"] = p.get("streak", 0) + 1
+            p["last_reviewed"] = time.time()
+            p["subject"] = self.task.get("subject", "")
+            p["topic"] = self.task.get("topic", "")
+            intervals = [3600, 86400, 3*86400, 7*86400, 14*86400, 30*86400]
+            idx_int = min(p["streak"] - 1, len(intervals) - 1)
+            p["next_review"] = time.time() + intervals[idx_int]
+            self.progress[tid] = p
+            save_progress(self.progress)
+
+            self.feedback_title.set_markup("<span foreground='#78c45d'><b>🎉 ВЕРНО! Идеально!</b></span>")
+            self.feedback_label.set_text(self.task.get("explanation", ""))
+            self.feedback_box.set_visible(True)
+            self.continue_btn.set_visible(True)
+        else:
+            button.add_css_class("option-wrong")
+            self.disabled_wrong_indices.add(chosen_idx)
+            
+            p = self.progress.get(tid, {"streak": 0, "reviews": 0})
+            p["reviews"] = p.get("reviews", 0) + 1
+            p["streak"] = 0
+            p["last_reviewed"] = time.time()
+            p["subject"] = self.task.get("subject", "")
+            p["topic"] = self.task.get("topic", "")
+            p["next_review"] = time.time() + 1800
+            self.progress[tid] = p
+            save_progress(self.progress)
+
+            self.feedback_title.set_markup("<span foreground='#d4574a'><b>❌ НЕВЕРНО! Подумай и перерешай на черновике.</b></span>")
+            self.feedback_label.set_text("Верный ответ скрыт. Обрати внимание на конспект в Obsidian на 2-м экране и разобранный пример выше, распиши решение на листке и выбери правильный вариант после окончания таймера.")
+            self.feedback_box.set_visible(True)
+
+            self.start_countdown(WRONG_ANSWER_PENALTY, "⏳ Штраф за ошибку: перерешай на черновике. Разблокировка через", self.unlock_options)
+
+    def on_continue_clicked(self, button):
+        self.answered_correctly = True
+        close_study_helpers()
+        restore_previous_workspace(self.prev_workspace)
+        self.window.close()
+
+def main():
+    ensure_single_popup_instance()
+    app = StudyApp()
+    app.run(sys.argv)
+
+if __name__ == "__main__":
+    main()

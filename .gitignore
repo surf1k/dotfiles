@@ -1,0 +1,19 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Caches and logs
+*.log
+*.bak
+*.swp
+*~
+.cache/
+.DS_Store
+
+# Sensitive files / keys
+*.pem
+*.key
+*.token
+.env
+.env.*

@@ -1,0 +1,123 @@
+* {
+    font-family: "Nunito", "JetBrainsMono Nerd Font", sans-serif;
+    font-size: 13px;
+    font-weight: 800;
+    min-height: 0;
+}
+
+window#waybar {
+    background: transparent;
+}
+
+.modules-left,
+.modules-center,
+.modules-right {
+    background: linear-gradient(180deg, rgba(20, 34, 24, 0.95) 0%, rgba(10, 18, 12, 0.96) 100%);
+    border: 2px solid #dec07e;
+    border-top: 2px solid #fed594;
+    border-bottom: 2px solid #8e6c32;
+    border-radius: 18px;
+    padding: 2px 14px;
+    margin: 4px 6px;
+    box-shadow: inset 0 1px 2px rgba(254, 213, 148, 0.4),
+                inset 0 -1px 3px rgba(0, 0, 0, 0.8),
+                0 6px 16px rgba(0, 0, 0, 0.85);
+}
+
+#workspaces {
+    padding: 0 4px;
+}
+
+#workspaces button {
+    padding: 0 6px;
+    background: transparent;
+    color: #4e6e44;
+    border: none;
+    border-radius: 10px;
+    font-size: 15px;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#workspaces button:hover {
+    color: #fed594;
+    text-shadow: 0 0 8px #dec07e;
+    background-color: rgba(222, 192, 126, 0.15);
+}
+
+#workspaces button.active {
+    color: #78c45d;
+    font-size: 17px;
+    text-shadow: 0 0 10px #78c45d, 0 0 3px #ffffff;
+}
+
+#window {
+    color: #dce7cf;
+    padding: 0 10px;
+    font-weight: 700;
+}
+
+.modules-center {
+    background: linear-gradient(180deg, rgba(26, 42, 30, 0.96) 0%, rgba(12, 20, 14, 0.98) 100%);
+    border: 2px solid #dec07e;
+    border-top: 2px solid #fed594;
+    border-bottom: 2px solid #7c5c24;
+    box-shadow: inset 0 0 8px rgba(222, 192, 126, 0.35),
+                0 6px 18px rgba(0, 0, 0, 0.9);
+}
+
+#clock {
+    color: #fed594;
+    padding: 0 12px;
+    font-weight: 900;
+    font-size: 13.5px;
+    letter-spacing: 0.5px;
+    text-shadow: 0 0 10px rgba(254, 213, 148, 0.5);
+}
+
+#cava {
+    color: #78c45d;
+    padding: 0 10px;
+    font-size: 14px;
+}
+
+#mpris {
+    color: #dec07e;
+    padding: 0 10px;
+    font-weight: 700;
+}
+
+#cpu,
+#memory {
+    color: #a3c299;
+    padding: 0 8px;
+    border-left: 1px solid rgba(222, 192, 126, 0.25);
+}
+
+#pulseaudio {
+    color: #fed594;
+    padding: 0 8px;
+    border-left: 1px solid rgba(222, 192, 126, 0.25);
+}
+
+#pulseaudio.muted {
+    color: #e06c75;
+}
+
+#pulseaudio.microphone {
+    color: #78c45d;
+    padding: 0 8px;
+    border-left: 1px solid rgba(222, 192, 126, 0.25);
+}
+
+#pulseaudio.microphone.source-muted {
+    color: #e06c75;
+}
+
+#tray {
+    padding: 0 8px;
+    border-left: 1px solid rgba(222, 192, 126, 0.25);
+}
+
+#tray > widget {
+    color: #a3c299;
+}

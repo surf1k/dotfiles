@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+
+WALL_DIR="$HOME/Pictures/Wallpapers"
+TARGET_LINK="$HOME/.config/wallpaper.jpg"
+
+OPT="$1"
+case "$OPT" in
+    1|"observatory")
+        IMG="$WALL_DIR/5k-steampunk-emerald-observatory-art.png"
+        NAME="5K Стимпанк: Изумрудная Часовая Обсерватория в Лесу (5504x3072)"
+        ;;
+    2|"forest")
+        IMG="$WALL_DIR/4k-emerald-steampunk-forest-art.png"
+        NAME="5K Стимпанк: Древний Лес Шестерёнок и Труб (5504x3072)"
+        ;;
+    3|"sanctuary")
+        IMG="$WALL_DIR/4k-emerald-clockwork-sanctuary-art.png"
+        NAME="5K Стимпанк: Часовое Святилище в Каньоне (5504x3072)"
+        ;;
+    *)
+        if [ -f "$OPT" ]; then
+            IMG="$OPT"
+            NAME="$(basename "$OPT")"
+        elif [ -f "$WALL_DIR/$OPT" ]; then
+            IMG="$WALL_DIR/$OPT"
+            NAME="$OPT"
+        else
+            IMG="$WALL_DIR/5k-steampunk-emerald-observatory-art.png"
+            NAME="5K Стимпанк: Изумрудная Часовая Обсерватория в Лесу (5504x3072)"
+        fi
+        ;;
+esac
+
+ln -sf "$IMG" "$TARGET_LINK"
+
+pkill -x swaybg 2>/dev/null || true
+nohup /home/ym1co/.local/bin/swaybg-wrapper >/dev/null 2>&1 &
+
+notify-send -i "$IMG" "🌲 Стимпанк Арт 5K применен" "$NAME" 2>/dev/null || true
+echo "Установлен 5K Изумрудный Стимпанк Арт: $NAME"

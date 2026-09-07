@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+INPUT=$(cat)
+
+CHOSEN=$(echo "$INPUT" | fuzzel --dmenu --prompt="📺 Экран для стрима: " 2>/dev/null)
+
+if [ -n "$CHOSEN" ]; then
+    echo "$CHOSEN"
+else
+    DEFAULT=$(echo "$INPUT" | grep "DP-1" | head -n 1)
+    if [ -n "$DEFAULT" ]; then
+        echo "$DEFAULT"
+    else
+        echo "$INPUT" | head -n 1
+    fi
+fi

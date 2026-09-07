@@ -1,0 +1,66 @@
+{
+    "layer": "top",
+    "position": "top",
+    "height": 38,
+    "margin-top": 8,
+    "margin-left": 14,
+    "margin-right": 14,
+    "spacing": 0,
+    "modules-left": ["niri/workspaces", "mpris"],
+    "modules-center": ["clock"],
+    "modules-right": ["cava", "niri/window", "pulseaudio", "pulseaudio#microphone", "cpu", "memory", "tray"],
+
+    "niri/workspaces": {
+    	"format": "{icon}",
+    	"format-icons": {
+    	    "active": "⚙",
+            "default": ""
+    	}
+    },
+    "niri/window": {
+        "format": "\uf2d0 {title}",
+        "max-length": 30
+    },
+    "clock": {
+        "format": "\uf017 {:%H:%M   %a  %d %b}"
+    },
+    "cava": {
+	"framerate": 30,
+	"autosens": 0,
+	"sensitivity": 15,
+	"bars": 12,
+	"bar_delimiter": 0,
+	"format-icons": ["\u2581", "\u2582", "\u2583", "\u2584", "\u2585", "\u2586", "\u2587", "\u2588"],
+	"input_delay": 2
+    },
+    "mpris": {
+        "format": "\uf001 {dynamic}",
+        "format-paused": "\uf04c {dynamic}",
+        "max-length": 30,
+        "on-click": "playerctl play-pause",
+        "on-scroll-up": "~/.config/waybar/scripts/mpris-throttle.sh next",
+        "on-scroll-down": "~/.config/waybar/scripts/mpris-throttle.sh previous"
+    },
+    "cpu": { 
+        "format": "\uf085 {usage}%" 
+    },
+    "memory": { 
+        "format": "\uf1c0 {}%" 
+    },
+    "pulseaudio": {
+        "format": "\uf028 {volume}%",
+        "format-muted": "\uf026 mute",
+        "on-click": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
+    },
+    "pulseaudio#microphone": {
+        "format": "{format_source}",
+        "format-source": "\uf130 {volume}%",
+        "format-source-muted": "\uf131 MUTED",
+        "on-click": "~/.local/bin/toggle-mic",
+        "on-scroll-up": "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%+",
+        "on-scroll-down": "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%-"
+    },
+    "tray": { 
+        "spacing": 8 
+    }
+}

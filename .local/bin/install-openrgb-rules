@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -e
+
+echo "🔧 Установка udev-правил и модуля i2c-dev для OpenRGB..."
+sudo cp /home/ym1co/.local/share/openrgb-app/usr/lib/udev/rules.d/60-openrgb.rules /etc/udev/rules.d/
+echo "i2c-dev" | sudo tee /etc/modules-load.d/i2c-dev.conf >/dev/null
+sudo modprobe i2c-dev 2>/dev/null || true
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+
+echo "✅ udev-правила активированы! Доступ к устройствам открыт."
+echo "🎨 Применяем тему: Изумрудный + Золото..."
+/home/ym1co/.local/bin/set-rgb-theme dual

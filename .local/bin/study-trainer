@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+import sys
+import os
+import json
+import random
+import time
+
+CONFIG_DIR = os.path.expanduser("~/.config/study-daemon")
+CURRICULUM_FILE = os.path.join(CONFIG_DIR, "curriculum.json")
+
+if CONFIG_DIR not in sys.path:
+    sys.path.insert(0, CONFIG_DIR)
+
+try:
+    from task_generator import ProceduralTaskGenerator
+except Exception:
+    ProceduralTaskGenerator = None
+
+# ANSI Colors
+GOLD = "\033[38;2;212;184;119m"
+GREEN = "\033[38;2;107;181;78m"
+RED = "\033[38;2;212;87;74m"
+CYAN = "\033[38;2;126;207;197m"
+PURPLE = "\033[38;2;180;120;240m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RESET = "\033[0m"
+
+BANNER = f"""{GOLD}{BOLD}
+╔═══════════════════════════════════════════════════════════════════════════╗
+║   ⚡ GOD OF KNOWLEDGE — УНИВЕРСАЛЬНЫЙ ТРЕНАЖЕР ЗНАНИЙ (ALL MODES)       ║
+║     JS & React + 13 Предметов Школы + CS + Процедурный Генератор         ║
+╚═══════════════════════════════════════════════════════════════════════════╝{RESET}
+"""
+
+def main():
+    if not os.path.exists(CURRICULUM_FILE):
+        print(f"{RED}База вопросов не найдена!{RESET}")
+        return
+
+    with open(CURRICULUM_FILE, "r", encoding="utf-8") as f:
+        questions = json.load(f)
+
+    os.system("clear")
+    print(BANNER)
+    print(f"{CYAN}Всего вопросов в базе: {BOLD}{len(questions)}{RESET}\n")
+    print(f"  {BOLD}1.{RESET} 🎲 Случайный блиц (10 вопросов из ВСЕХ областей)")
+    print(f"  {BOLD}2.{RESET} ⚡ {GOLD}{BOLD}JavaScript & React (Академия: Замыкания, Event Loop, Хуки){RESET}")
+    print(f"  {BOLD}3.{RESET} 📐 Математика & Физика (Профиль & Черновик)")
+    print(f"  {BOLD}4.{RESET} 🇺🇦 Украинский язык & Литература (НМТ 200/200)")
+    print(f"  {BOLD}5.{RESET} 💻 Senior Computer Science & LeetCode (Algorithms, Big-O)")
+    print(f"  {BOLD}6.{RESET} 🏛️ История Украины & Мировая история")
+    print(f"  {BOLD}7.{RESET} 🧪 Химия & 🧬 Биология & 🗺️ География")
+    print(f"  {BOLD}8.{RESET} ♾️  Бесконечный процедурный генератор (Случайные числа)")
+    print(f"  {BOLD}9.{RESET} 🏆 {PURPLE}{BOLD}ПОЛНЫЙ ВЫПУСКНОЙ ГОДОВОЙ ЭКЗАМЕН (25 вопросов со всех тем){RESET}")
+    print(f"  {BOLD}0.{RESET} 🚪 Выход\n")
+
+    choice = input(f"{GOLD}Выбери режим (1-9): {RESET}").strip()
+
+    count = 10
+    if choice == "8":
+        sample = [ProceduralTaskGenerator.get_random_task() for _ in range(10)]
+    elif choice == "9":
+        count = 25
+        sample = random.sample(questions, min(count, len(questions)))
+    elif choice == "1":
+        sample = random.sample(questions, min(10, len(questions)))
+    elif choice == "2":
+        pool = [q for q in questions if any(s in q["subject"] for s in ["JavaScript", "React"])]
+        sample = random.sample(pool, min(10, len(pool))) if pool else questions[:10]
+    elif choice == "3":
+        pool = [q for q in questions if any(s in q["subject"] for s in ["Математика", "Физика"])]
+        sample = random.sample(pool, min(10, len(pool)))
+    elif choice == "4":
+        pool = [q for q in questions if any(s in q["subject"] for s in ["Укр. мова", "Укр. література"])]
+        sample = random.sample(pool, min(10, len(pool)))
+    elif choice == "5":
+        pool = [q for q in questions if "CS" in q["subject"] or "Информатика" in q["subject"]]
+        sample = random.sample(pool, min(10, len(pool)))
+    elif choice == "6":
+        pool = [q for q in questions if "История" in q["subject"]]
+        sample = random.sample(pool, min(10, len(pool)))
+    elif choice == "7":
+        pool = [q for q in questions if any(s in q["subject"] for s in ["Химия", "Биология", "География"])]
+        sample = random.sample(pool, min(10, len(pool))) if pool else questions[:10]
+    else:
+        print("Выход.")
+        return
+
+    score = 0
+
+    for idx, q in enumerate(sample, 1):
+        os.system("clear")
+        print(f"{GOLD}{BOLD}=== Вопрос {idx}/{len(sample)} ==={RESET}")
+        print(f"{CYAN}[{q.get('subject', '')} | {q.get('topic', '')}]{RESET}\n")
+        print(f"{BOLD}{q['question']}{RESET}\n")
+
+        letters = ["A", "B", "C", "D"]
+        for opt_idx, opt_text in enumerate(q["options"]):
+            print(f"  {BOLD}{letters[opt_idx]}.{RESET} {opt_text}")
+
+        ans = input(f"\n{GOLD}Твой ответ (A, B, C, D) [q=выйти]: {RESET}").strip().upper()
+        if ans in ["Q", "QUIT"]:
+            break
+
+        correct_letter = letters[q["correct_index"]]
+
+        if ans == correct_letter:
+            print(f"\n{GREEN}{BOLD}🎉 ВЕРНО! Идеально!{RESET}")
+            score += 1
+        else:
+            print(f"\n{RED}{BOLD}❌ НЕВЕРНО! Правильный ответ: {correct_letter}. {q['options'][q['correct_index']]}{RESET}")
+
+        print(f"\n{CYAN}💡 Разбор: {RESET}\n{q['explanation']}")
+        input(f"\n{GOLD}Нажми Enter для продолжения...{RESET}")
+
+    os.system("clear")
+    print(BANNER)
+    pct = int((score / len(sample)) * 100)
+    print(f"{GOLD}{BOLD}ТВОЙ РЕЗУЛЬТАТ: {score} из {len(sample)} ({pct}%){RESET}")
+    if pct >= 90:
+        print(f"{GREEN}{BOLD}🏆 ТЫ ЕБАНЫЙ БОГ ЗНАНИЙ! ОТЛИЧНИК ГОДА И SENIOR GRADE!{RESET}\n")
+    elif pct >= 70:
+        print(f"{CYAN}{BOLD}🔥 Отличный результат! Держи мозг в тонусе.{RESET}\n")
+    else:
+        print(f"{RED}{BOLD}⚠️ Бери черновик и конспекты в Obsidian, закрывай пробелы!{RESET}\n")
+
+if __name__ == "__main__":
+    main()

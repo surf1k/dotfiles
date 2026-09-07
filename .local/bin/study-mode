@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+import sys
+import os
+import json
+import time
+import subprocess
+
+CONFIG_DIR = os.path.expanduser("~/.config/study-daemon")
+STATE_FILE = os.path.join(CONFIG_DIR, "state.json")
+
+os.makedirs(CONFIG_DIR, exist_ok=True)
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"enabled": True, "paused_until": 0, "interval_min": 120, "interval_max": 300}
+
+def save_state(state):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+
+def parse_duration(s):
+    s = str(s).lower().strip()
+    if s.endswith("d") or s.endswith("д") or s.endswith("сут") or s.endswith("дней") or s.endswith("суток"):
+        val = s.replace("суток", "").replace("дней", "").replace("сут", "").replace("д", "").replace("d", "")
+        return float(val) * 86400
+    elif s.endswith("h") or s.endswith("ч"):
+        return float(s[:-1]) * 3600
+    elif s.endswith("m") or s.endswith("м") or s.endswith("мин"):
+        val = s.replace("мин", "").replace("м", "").replace("m", "")
+        return float(val) * 60
+    elif s.endswith("s") or s.endswith("сек"):
+        val = s.replace("сек", "").replace("s", "")
+        return float(val)
+    else:
+        try:
+            return float(s) * 3600
+        except ValueError:
+            return 7200
+
+def notify(title, msg):
+    try:
+        subprocess.run(["notify-send", "-u", "normal", title, msg], stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+def main():
+    state = load_state()
+    prog = os.path.basename(sys.argv[0])
+    args = sys.argv[1:]
+
+    if prog in ["study-pause", "chill-mode"]:
+        cmd = "pause"
+        dur_str = args[0] if args else "2h"
+    elif prog == "study-off":
+        cmd = "off"
+    elif prog == "study-on":
+        cmd = "on"
+    else:
+        cmd = args[0].lower() if args else "status"
+        dur_str = args[1] if len(args) > 1 else "2h"
+
+    if cmd in ["off", "stop", "disable"]:
+        state["enabled"] = False
+        state["paused_until"] = 0
+        save_state(state)
+        print("🛑 Обучающие чекпоинты ПОЛНОСТЬЮ ВЫКЛЮЧЕНЫ.")
+        notify("🍿 Кино-режим / Чилл", "Обучающие чекпоинты полностью выключены.")
+    elif cmd in ["on", "start", "enable", "resume"]:
+        state["enabled"] = True
+        state["paused_until"] = 0
+        save_state(state)
+        print("✅ Обучающие чекпоинты ВКЛЮЧЕНЫ (интенсивный интервал 2-5 минут).")
+        notify("🎓 Режим Учебы АКТИВИРОВАН", "Чекпоинты будут вылезать каждые 2-5 минут.")
+    elif cmd in ["pause", "chill", "date", "movie"]:
+        seconds = parse_duration(dur_str if 'dur_str' in locals() else "2h")
+        state["enabled"] = True
+        state["paused_until"] = time.time() + seconds
+        save_state(state)
+        mins = int(seconds // 60)
+        h = mins // 60
+        m = mins % 60
+        time_text = f"{h} ч {m} мин" if h > 0 else f"{m} минут"
+        print(f"🍿 Чилл / Пауза активирована на {time_text}!")
+        notify("🍿 Пауза на отдых", f"Чекпоинты заморожены на {time_text}. Приятного отдыха!")
+    elif cmd in ["status", "info"]:
+        now = time.time()
+        if not state.get("enabled", True):
+            print("Статус: 🔴 ПОЛНОСТЬЮ ВЫКЛЮЧЕНО (study-off / study-mode off)")
+        elif state.get("paused_until", 0) > now:
+            rem = int(state["paused_until"] - now)
+            mins = rem // 60
+            secs = rem % 60
+            print(f"Статус: 🍿 НА ПАУЗЕ (осталось {mins} мин {secs} сек)")
+        else:
+            print(f"Статус: 🟢 АКТИВЕН (интенсивный интервал {state.get('interval_min', 120)}–{state.get('interval_max', 300)} сек)")
+    else:
+        print("Использование study-mode:")
+        print("  study-off              - Полностью выключить (когда пришли гости/девушка)")
+        print("  study-pause 2h         - Поставить на паузу на 2 часа (30m, 1h, 4h)")
+        print("  study-on               - Возобновить работу")
+        print("  study-mode status      - Текущий статус")
+
+if __name__ == "__main__":
+    main()
