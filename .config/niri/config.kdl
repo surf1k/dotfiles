@@ -342,6 +342,7 @@ binds {
     Mod+M hotkey-overlay-title="Open YouTube Music" { spawn-sh "~/.local/bin/yt-music"; }
     Mod+Y hotkey-overlay-title="Phonograph Lyrics Player" { spawn "kitty" "--title=lines" "-e" "/home/ym1co/.local/bin/lines"; }
     Mod+B hotkey-overlay-title="Steampunk Boiler Telemetry" { spawn "kitty" "--title=boiler" "-e" "/home/ym1co/.local/bin/boiler"; }
+    Mod+E hotkey-overlay-title="Steampunk Neovim Editor" { spawn "kitty" "--title=nvim" "-e" "nvim"; }
     Mod+P hotkey-overlay-title="Study Checkpoint Quiz" { spawn "~/.local/bin/study-quiz"; }
     Mod+Shift+P hotkey-overlay-title="Cross-Quiz Blitz GUI (All Subjects)" { spawn "~/.local/bin/cross-quiz"; }
     Page_Down allow-when-locked=true hotkey-overlay-title="Toggle Microphone Mute" { spawn-sh "~/.local/bin/toggle-mic"; }
@@ -613,6 +614,13 @@ window-rule {
     open-floating true
     default-column-width { fixed 1100; }
     default-window-height { fixed 640; }
+}
+
+window-rule {
+    match app-id=r#"^kitty$"# title=r#"^nvim.*$"#
+    open-floating true
+    default-column-width { fixed 1200; }
+    default-window-height { fixed 800; }
 }
 
 debug {

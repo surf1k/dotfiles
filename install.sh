@@ -46,6 +46,7 @@ CONFIG_ITEMS=(
     "niri"
     "waybar"
     "kitty"
+    "nvim"
     "fastfetch"
     "cava"
     "rofi"
