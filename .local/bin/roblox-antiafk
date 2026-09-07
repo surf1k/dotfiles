@@ -191,37 +191,27 @@ def uinput_tap_key(ui, key_code, press_time=0.14):
     ui.write(e.EV_KEY, key_code, 0)
     ui.syn()
 
-def perform_wasd_routine(x11_sender, x11_win, ui=None, is_focused=False, jump=False):
+def perform_antiafk_routine(x11_sender, x11_win, ui=None, is_focused=False, jump=True, a_duration=None):
     """
-    Выполняет W -> S (вперед-назад) и A -> D (влево-вправо).
-    Если окно не в фокусе, отправляет строго в X11 окно Sober без переключения фокуса!
+    Выполняет: 1 раз Пробел (Space) + зажатие 'A' на 300-400 мс.
+    Отправляет строго в окно Sober без переключения окон и фокуса.
     """
+    if a_duration is None:
+        a_duration = random.uniform(0.30, 0.40)
+
     if x11_sender and x11_win:
-        # W -> S
-        x11_sender.tap_key(x11_win, "w", random.uniform(0.12, 0.18))
-        time.sleep(random.uniform(0.06, 0.10))
-        x11_sender.tap_key(x11_win, "s", random.uniform(0.12, 0.18))
-        time.sleep(random.uniform(0.06, 0.10))
-        
-        # A -> D
-        x11_sender.tap_key(x11_win, "a", random.uniform(0.12, 0.18))
-        time.sleep(random.uniform(0.06, 0.10))
-        x11_sender.tap_key(x11_win, "d", random.uniform(0.12, 0.18))
-        
-        if jump:
-            time.sleep(random.uniform(0.06, 0.10))
-            x11_sender.tap_key(x11_win, "space", random.uniform(0.08, 0.12))
+        # 1. Одно нажатие на Пробел (Space)
+        x11_sender.tap_key(x11_win, "space", random.uniform(0.08, 0.12))
+        time.sleep(random.uniform(0.08, 0.15))
+
+        # 2. Зажатие клавиши 'a' на 300 - 400 мс
+        x11_sender.tap_key(x11_win, "a", a_duration)
     elif ui and is_focused:
-        uinput_tap_key(ui, e.KEY_W, random.uniform(0.12, 0.18))
-        time.sleep(random.uniform(0.06, 0.10))
-        uinput_tap_key(ui, e.KEY_S, random.uniform(0.12, 0.18))
-        time.sleep(random.uniform(0.06, 0.10))
-        uinput_tap_key(ui, e.KEY_A, random.uniform(0.12, 0.18))
-        time.sleep(random.uniform(0.06, 0.10))
-        uinput_tap_key(ui, e.KEY_D, random.uniform(0.12, 0.18))
-        if jump:
-            time.sleep(random.uniform(0.06, 0.10))
-            uinput_tap_key(ui, e.KEY_SPACE, random.uniform(0.08, 0.12))
+        uinput_tap_key(ui, e.KEY_SPACE, random.uniform(0.08, 0.12))
+        time.sleep(random.uniform(0.08, 0.15))
+        uinput_tap_key(ui, e.KEY_A, a_duration)
+
+perform_wasd_routine = perform_antiafk_routine
 
 def notify(msg):
     try:
@@ -353,17 +343,17 @@ def main():
             )
 
             if is_roblox_focused:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] [🕹️] Роблокс в фокусе. Нажимаем W -> S -> A -> D...")
-                perform_wasd_routine(x11_sender, sober_x11, ui=ui, is_focused=True, jump=args.jump)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [🕹️] Роблокс в фокусе. Нажатие Space + зажатие 'A' (300-400 мс)...")
+                perform_antiafk_routine(x11_sender, sober_x11, ui=ui, is_focused=True)
                 if args.notify:
-                    notify("Anti-AFK: клавиши WASD нажаты!")
+                    notify("Anti-AFK: Space + 'A' (300-400 мс) нажаты!")
             else:
                 # Тихо отправляем в окно Sober без переключения окон
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] [🔄] Роблокс в фоне. Отправка WASD напрямую в окно Sober (без переключения экранов)...")
-                perform_wasd_routine(x11_sender, sober_x11, ui=ui, is_focused=False, jump=args.jump)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [🔄] Роблокс в фоне. Отправка Space + 'A' (300-400 мс) напрямую в окно Sober (без переключения экранов)...")
+                perform_antiafk_routine(x11_sender, sober_x11, ui=ui, is_focused=False)
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [✅] Нажатия выполнены в фоне. Ваш текущий экран не прерывался.")
                 if args.notify:
-                    notify("Anti-AFK: фоновые клавиши WASD успешно отправлены!")
+                    notify("Anti-AFK: фоновые Space + 'A' (300-400 мс) успешно отправлены!")
 
             # Вычисляем время до следующего цикла со случайным разбросом
             jitter = random.randint(-args.random, args.random)
