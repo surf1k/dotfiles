@@ -37,7 +37,7 @@ done
 
 # Set default wallpaper symlink if not present
 if [ ! -e "$HOME/.config/wallpaper.jpg" ]; then
-    ln -sf "$HOME/Pictures/Wallpapers/5k-steampunk-emerald-observatory-art.png" "$HOME/.config/wallpaper.jpg"
+    ln -sf "$HOME/Pictures/Wallpapers/4k-emerald-clockwork-sanctuary-art.png" "$HOME/.config/wallpaper.jpg"
 fi
 
 # 2. Link .config directories & files

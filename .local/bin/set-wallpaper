@@ -5,17 +5,13 @@ TARGET_LINK="$HOME/.config/wallpaper.jpg"
 
 OPT="$1"
 case "$OPT" in
-    1|"observatory")
-        IMG="$WALL_DIR/5k-steampunk-emerald-observatory-art.png"
-        NAME="5K Стимпанк: Изумрудная Часовая Обсерватория в Лесу (5504x3072)"
+    1|"sanctuary")
+        IMG="$WALL_DIR/4k-emerald-clockwork-sanctuary-art.png"
+        NAME="5K Стимпанк: Часовое Святилище в Каньоне (5504x3072)"
         ;;
     2|"forest")
         IMG="$WALL_DIR/4k-emerald-steampunk-forest-art.png"
         NAME="5K Стимпанк: Древний Лес Шестерёнок и Труб (5504x3072)"
-        ;;
-    3|"sanctuary")
-        IMG="$WALL_DIR/4k-emerald-clockwork-sanctuary-art.png"
-        NAME="5K Стимпанк: Часовое Святилище в Каньоне (5504x3072)"
         ;;
     *)
         if [ -f "$OPT" ]; then
@@ -25,8 +21,8 @@ case "$OPT" in
             IMG="$WALL_DIR/$OPT"
             NAME="$OPT"
         else
-            IMG="$WALL_DIR/5k-steampunk-emerald-observatory-art.png"
-            NAME="5K Стимпанк: Изумрудная Часовая Обсерватория в Лесу (5504x3072)"
+            IMG="$WALL_DIR/4k-emerald-clockwork-sanctuary-art.png"
+            NAME="5K Стимпанк: Часовое Святилище в Каньоне (5504x3072)"
         fi
         ;;
 esac

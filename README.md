@@ -58,8 +58,7 @@ Translates live Linux hardware sensors (CPU, RAM, GPU, Disk, Temps) into a funct
 - Automatically detects and re-assigns USB composite audio sinks/sources when devices drop or fail.
 
 ### 5. `set-wallpaper` & `swaybg-wrapper`
-- High-resolution 5K & 4K bespoke Steampunk artwork collection included in `wallpapers/`.
-- Hot-swapping between *Emerald Observatory*, *Clockwork Forest*, and *Sanctuary*.
+- Curated 5K Steampunk art: *Clockwork Sanctuary* and *Ancient Clockwork Forest*.
 
 ### 6. Suite of Custom Tools
 - **`roblox-antiafk`**: Background non-intrusive anti-AFK agent using direct XSendEvent (never steals focus or workspace).
