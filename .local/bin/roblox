@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+export WAYLAND_DISPLAY=""
+exec flatpak run --nosocket=wayland --socket=x11 --socket=fallback-x11 org.vinegarhq.Sober "$@"

@@ -1,0 +1,357 @@
+#!/usr/bin/env python3
+"""
+boiler - Steampunk Imperial Steam Engine & Boiler Telemetry Dashboard
+Translates real Linux system metrics (CPU, RAM, GPU, Disk, Temps) into Victorian Clockwork Machinery.
+"""
+
+import sys
+import os
+import time
+import math
+import shutil
+import signal
+import select
+import termios
+import tty
+import subprocess
+import re
+
+# --- Palette: Emerald & Antique Gold ---
+RESET = "\033[0m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+GOLD = "\033[38;2;222;192;126m"
+GOLD_BRIGHT = "\033[1;38;2;255;235;160m"
+GOLD_MUTED = "\033[38;2;170;148;95m"
+EMERALD = "\033[38;2;120;196;93m"
+EMERALD_BRIGHT = "\033[1;38;2;155;235;125m"
+EMERALD_MUTED = "\033[38;2;90;140;72m"
+BORDER = "\033[38;2;95;110;85m"
+STEAM = "\033[38;2;195;220;215m"
+FIRE = "\033[38;2;235;125;65m"
+FIRE_BRIGHT = "\033[1;38;2;255;165;85m"
+
+ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
+def strip_ansi(s):
+    return ANSI_RE.sub('', s)
+
+def visible_len(s):
+    return len(strip_ansi(s))
+
+def truncate_vis(s, max_len):
+    if visible_len(s) <= max_len:
+        return s
+    res = []
+    cur_len = 0
+    i = 0
+    while i < len(s):
+        m = ANSI_RE.match(s, i)
+        if m:
+            res.append(m.group(0))
+            i = m.end()
+        else:
+            if cur_len + 1 > max_len - 1:
+                res.append("…")
+                res.append(RESET)
+                break
+            res.append(s[i])
+            cur_len += 1
+            i += 1
+    return "".join(res)
+
+def center_vis(s, width):
+    v = visible_len(s)
+    if v >= width:
+        return truncate_vis(s, width)
+    pad = (width - v) // 2
+    return " " * pad + s + " " * (width - v - pad)
+
+class BoilerDashboard:
+    def __init__(self):
+        self.running = True
+        self.whistle_time = 0.0
+        self.blowoff_time = 0.0
+        self.coal_boost = 0.0
+        self.piston_phase = 0.0
+        self.old_termios = None
+        self.need_clear = True
+        self.cols, self.rows = self._get_size()
+        self._setup()
+
+    def _get_size(self):
+        try:
+            ts = shutil.get_terminal_size((80, 24))
+            return max(40, ts.columns), max(12, ts.lines)
+        except Exception:
+            return 80, 24
+
+    def _setup(self):
+        if sys.stdin.isatty():
+            try:
+                self.old_termios = termios.tcgetattr(sys.stdin)
+                tty.setcbreak(sys.stdin.fileno())
+            except Exception:
+                pass
+        sys.stdout.write("\033[?1049h\033[?25l\033[2J")
+        sys.stdout.flush()
+
+    def _restore(self):
+        sys.stdout.write("\033[?25h\033[?1049l")
+        sys.stdout.flush()
+        if self.old_termios and sys.stdin.isatty():
+            try:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.old_termios)
+            except Exception:
+                pass
+
+    def handle_resize(self, sig, frame):
+        self.cols, self.rows = self._get_size()
+        self.need_clear = True
+
+    def get_metrics(self):
+        # 1. CPU temp
+        cpu_temp = 55.0
+        try:
+            with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
+                cpu_temp = float(f.read().strip()) / 1000.0
+        except Exception:
+            try:
+                out = subprocess.check_output(["sensors"], text=True, stderr=subprocess.DEVNULL)
+                m = re.search(r'Package id 0:\s+\+([0-9\.]+)°C', out)
+                if m:
+                    cpu_temp = float(m.group(1))
+            except Exception:
+                pass
+
+        # 2. CPU load / pressure
+        load1 = 1.0
+        try:
+            load1, _, _ = os.getloadavg()
+        except Exception:
+            pass
+        # Pressure: scaled to 1.5 - 4.5 BAR
+        pressure = min(6.0, max(1.0, 1.5 + (load1 * 0.35)))
+
+        # 3. RAM / Water Reservoir
+        ram_used, ram_total, ram_pct = 8000, 32000, 25
+        try:
+            with open("/proc/meminfo", "r") as f:
+                mem = {}
+                for line in f:
+                    parts = line.split(":")
+                    if len(parts) == 2:
+                        mem[parts[0].strip()] = int(parts[1].split()[0])
+                total = mem.get("MemTotal", 32000000) // 1024
+                avail = mem.get("MemAvailable", 16000000) // 1024
+                used = total - avail
+                ram_used = used
+                ram_total = total
+                ram_pct = int((used / total) * 100) if total > 0 else 0
+        except Exception:
+            pass
+
+        # 4. GPU / Dynamo
+        gpu_temp = 48.0
+        gpu_util = 15
+        gpu_pwr = 45.0
+        try:
+            smi = subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=temperature.gpu,utilization.gpu,power.draw", "--format=csv,noheader,nounits"],
+                text=True, stderr=subprocess.DEVNULL
+            ).strip()
+            parts = [p.strip() for p in smi.split(",")]
+            if len(parts) >= 3:
+                gpu_temp = float(parts[0])
+                gpu_util = int(parts[1])
+                gpu_pwr = float(parts[2])
+        except Exception:
+            pass
+
+        # 5. Disk / Coal Bunker
+        disk_pct = 45
+        try:
+            st = os.statvfs("/")
+            total_b = st.f_blocks * st.f_frsize
+            free_b = st.f_bavail * st.f_frsize
+            used_b = total_b - free_b
+            disk_pct = int((used_b / total_b) * 100) if total_b > 0 else 0
+        except Exception:
+            pass
+
+        # Apply temporary coal boost decay
+        if self.coal_boost > 0:
+            self.coal_boost = max(0.0, self.coal_boost - 0.2)
+            cpu_temp += self.coal_boost
+            pressure += (self.coal_boost * 0.1)
+
+        return {
+            "cpu_temp": cpu_temp,
+            "pressure": pressure,
+            "ram_used": ram_used,
+            "ram_total": ram_total,
+            "ram_pct": ram_pct,
+            "gpu_temp": gpu_temp,
+            "gpu_util": gpu_util,
+            "gpu_pwr": gpu_pwr,
+            "disk_pct": disk_pct,
+        }
+
+    def render(self):
+        w = max(40, self.cols - 1)
+        h = max(12, self.rows)
+
+        if self.need_clear:
+            sys.stdout.write("\033[2J\033[H")
+            self.need_clear = False
+
+        m = self.get_metrics()
+        now = time.time()
+        buf = []
+
+        # 1. Header Banner
+        header = f" ⚙══❖ {GOLD}THE IMPERIAL STEAM ENGINE & BOILER PLANT{BORDER} ❖══⚙ "
+        dashes = max(2, w - 2 - visible_len(header))
+        d_l = dashes // 2
+        d_r = dashes - d_l
+        buf.append(f"{BORDER}╭" + ("─" * d_l) + header + ("─" * d_r) + f"╮{RESET}")
+
+        # Sub-header state
+        is_whistle = (now - self.whistle_time) < 2.0
+        is_blowoff = (now - self.blowoff_time) < 2.5
+        
+        if is_whistle:
+            status_text = f"{GOLD_BRIGHT}💨 *TOOOOOT!* IMPERIAL STEAM WHISTLE SOUNDING!{RESET}"
+        elif is_blowoff:
+            status_text = f"{EMERALD_BRIGHT}♨ EMERGENCY VALVE ENGAGED — PURGING EXCESS VAPOR{RESET}"
+        elif self.coal_boost > 0.5:
+            status_text = f"{FIRE_BRIGHT}🔥 COAL SHOVELED INTO FIREBOX! STEAM RAISING!{RESET}"
+        else:
+            status_text = f"{GOLD}CHAMBER REGIME: {EMERALD}SUPERHEATED CONTINUOUS CYCLE{RESET} {GOLD_MUTED}• № 1897-MK-IV{RESET}"
+            
+        buf.append(f"{BORDER}│{RESET} {center_vis(status_text, w - 4)} {BORDER}│{RESET}")
+        buf.append(f"{BORDER}├" + ("─" * (w - 2)) + f"┤{RESET}")
+
+        # 2. Main Machinery Telemetry Cards
+        # Firebox / CPU Temp Bar
+        f_len = min(20, max(8, (w - 35) // 2))
+        f_fill = int(f_len * (min(100.0, m["cpu_temp"]) / 100.0))
+        fire_bar = f"{FIRE}{'█' * f_fill}{BORDER}{'░' * max(0, f_len - f_fill)}{RESET}"
+        temp_color = FIRE_BRIGHT if m["cpu_temp"] > 80 else (GOLD if m["cpu_temp"] > 65 else EMERALD)
+        
+        # Manometer / Pressure Dial
+        psi = m["pressure"] * 14.5038
+        p_len = min(16, max(6, (w - 35) // 2))
+        p_knob_pos = int(min(p_len - 1, (m["pressure"] / 6.0) * p_len))
+        p_dial = ["━"] * p_len
+        p_dial[p_knob_pos] = f"{GOLD_BRIGHT}●{BORDER}"
+        dial_str = f"{EMERALD}" + "".join(p_dial[:p_knob_pos]) + "".join(p_dial[p_knob_pos:]) + f"{RESET}"
+
+        # Reservoir / RAM Bar
+        r_len = min(20, max(8, (w - 35) // 2))
+        r_fill = int(r_len * (m["ram_pct"] / 100.0))
+        water_bar = f"{EMERALD}{'█' * r_fill}{BORDER}{'░' * max(0, r_len - r_fill)}{RESET}"
+
+        # Coal Bunker / Disk Bar
+        c_len = min(16, max(6, (w - 35) // 2))
+        c_fill = int(c_len * (m["disk_pct"] / 100.0))
+        coal_bar = f"{GOLD}{'█' * c_fill}{BORDER}{'░' * max(0, c_len - c_fill)}{RESET}"
+
+        # Left Column: Boiler & Firebox
+        col1_title = f"{GOLD}❖ BOILER FIREBOX (CPU){RESET}"
+        line1_l = f"🔥 CORE TEMP:   {temp_color}{m['cpu_temp']:5.1f}°C{RESET} [{fire_bar}]"
+        line2_l = f"⚙ STEAM GAUGE: {GOLD}{m['pressure']:4.2f} BAR{RESET} ({psi:4.1f} PSI) [{dial_str}]"
+        
+        # Right Column: Water Reservoir & Coal
+        line1_r = f"💧 H₂O TANK:    {EMERALD}{m['ram_pct']:2d}%{RESET} ({m['ram_used']//1024}G/{m['ram_total']//1024}G) [{water_bar}]"
+        line2_r = f"⛏ COAL SUPPLY: {GOLD}{m['disk_pct']:2d}%{RESET} CAPACITY [{coal_bar}]"
+
+        buf.append(f"{BORDER}│{RESET}  {col1_title}{' ' * max(1, w - visible_len(col1_title) - 5)}{BORDER}│{RESET}")
+        buf.append(f"{BORDER}│{RESET}   {line1_l}{' ' * max(1, w - visible_len(line1_l) - 6)}{BORDER}│{RESET}")
+        buf.append(f"{BORDER}│{RESET}   {line2_l}{' ' * max(1, w - visible_len(line2_l) - 6)}{BORDER}│{RESET}")
+        buf.append(f"{BORDER}│{' ' * (w - 2)}│{RESET}")
+
+        buf.append(f"{BORDER}│{RESET}  {GOLD}❖ RESERVOIRS & FUEL BUNKERS{RESET}{' ' * max(1, w - 30)}{BORDER}│{RESET}")
+        buf.append(f"{BORDER}│{RESET}   {line1_r}{' ' * max(1, w - visible_len(line1_r) - 6)}{BORDER}│{RESET}")
+        buf.append(f"{BORDER}│{RESET}   {line2_r}{' ' * max(1, w - visible_len(line2_r) - 6)}{BORDER}│{RESET}")
+
+        # Dynamo / GPU if space permits
+        if h >= 18:
+            buf.append(f"{BORDER}│{' ' * (w - 2)}│{RESET}")
+            dyn_title = f"{GOLD}❖ BRASS DYNAMO & FLYWHEEL (GPU){RESET}"
+            rpm = int(800 + m["gpu_util"] * 18 + m["pressure"] * 150)
+            hp = m["gpu_pwr"] * 0.00134102
+            line_dyn = f"⚡ INDUCTION:   {EMERALD}{m['gpu_util']:2d}% LOAD{RESET} ({m['gpu_temp']:.0f}°C) {GOLD_MUTED}•{RESET} {GOLD}{rpm} RPM FLYWHEEL{RESET} {GOLD_MUTED}•{RESET} {EMERALD}{m['gpu_pwr']:.1f}W ({hp:.2f} HP){RESET}"
+            buf.append(f"{BORDER}│{RESET}  {dyn_title}{' ' * max(1, w - visible_len(dyn_title) - 5)}{BORDER}│{RESET}")
+            buf.append(f"{BORDER}│{RESET}   {line_dyn}{' ' * max(1, w - visible_len(line_dyn) - 6)}{BORDER}│{RESET}")
+
+        # 3. Animated Steam Piston Mechanism
+        self.piston_phase = (self.piston_phase + 0.3) % (2 * math.pi)
+        p1_off = int(6 * math.sin(self.piston_phase))
+        p2_off = int(6 * math.sin(self.piston_phase + math.pi))
+
+        if h >= 22:
+            buf.append(f"{BORDER}├─ {GOLD}⚙ TRANSMISSION PISTONS {BORDER}" + ("─" * max(2, w - 27)) + f"┤{RESET}")
+            
+            p_track_len = 16
+            p1_pos = max(0, min(p_track_len - 5, 5 + p1_off))
+            p2_pos = max(0, min(p_track_len - 5, 5 + p2_off))
+
+            p1_bar = " " * p1_pos + f"{GOLD_BRIGHT}[▓███▓]{RESET}" + " " * (p_track_len - 5 - p1_pos)
+            p2_bar = " " * p2_pos + f"{EMERALD}[██▓██]{RESET}" + " " * (p_track_len - 5 - p2_pos)
+
+            steam_cloud = "  ~ ° ☁ ~  " if not is_whistle else " 💨💨💨 VAPOR BLAST! 💨💨💨 "
+            buf.append(f"{BORDER}│{RESET}  PISTON #1: ⚙ {BORDER}│{p1_bar}│{RESET} ──[STEAM CYLINDER ALPHA]    {STEAM}{steam_cloud}{RESET}{' ' * max(1, w - 65)}{BORDER}│{RESET}")
+            buf.append(f"{BORDER}│{RESET}  PISTON #2: ⚙ {BORDER}│{p2_bar}│{RESET} ──[STEAM CYLINDER BETA]     {GOLD_MUTED}VALVE TIMING: 60° ADVANCE{RESET}{' ' * max(1, w - 65)}{BORDER}│{RESET}")
+
+        # Bottom Border
+        buf.append(f"{BORDER}╰" + ("─" * (w - 2)) + f"╯{RESET}")
+
+        # Footer controls
+        buf.append(f"{BORDER}" + ("━" * w) + f"{RESET}")
+        ctrls = f" {BORDER}[{RESET} {GOLD}[Space]{RESET} Whistle  {GOLD}[b]{RESET} Blow-off Valve  {GOLD}[c]{RESET} Shovel Coal  {GOLD}[q]{RESET} Quit {BORDER}]{RESET}  {EMERALD}TELEMETRY ACTIVE{RESET}"
+        buf.append(f"{ctrls}{' ' * max(1, w - visible_len(ctrls))}")
+
+        # Output to screen strictly <= h - 1 rows
+        max_rows = min(len(buf), h - 1)
+        out_lines = [truncate_vis(line, w) + "\033[K" for line in buf[:max_rows]]
+        sys.stdout.write("\033[H" + "\r\n".join(out_lines))
+        sys.stdout.flush()
+
+    def run(self):
+        signal.signal(signal.SIGWINCH, self.handle_resize)
+        try:
+            while self.running:
+                while select.select([sys.stdin], [], [], 0)[0]:
+                    ch = sys.stdin.read(1)
+                    if ch in ['q', 'Q', '\x1b', '\x03']:
+                        self.running = False
+                        return
+                    elif ch == ' ':
+                        self.whistle_time = time.time()
+                    elif ch in ['b', 'B']:
+                        self.blowoff_time = time.time()
+                    elif ch in ['c', 'C']:
+                        self.coal_boost = min(15.0, self.coal_boost + 5.0)
+
+                self.render()
+                time.sleep(0.08) # ~12 FPS for smooth piston motion
+        finally:
+            self._restore()
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] in ['-h', '--help']:
+        print(f"""
+{GOLD}boiler{RESET} — Стимпанк Телеметрия и Мониторинг Системы в Реальном Времени
+
+{EMERALD}Горячие клавиши:{RESET}
+  [Space]     Подать паровой свисток (Steam Whistle Blast) 💨
+  [b]         Аварийный сброс пара (Blow-off Valve) ♨
+  [c]         Подкинуть угля в топку (+5°C Boost) 🔥
+  [q] / Esc   Выход
+""")
+        return
+    app = BoilerDashboard()
+    app.run()
+
+if __name__ == '__main__':
+    main()

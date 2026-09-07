@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+"""
+davinci-stitch:
+Automatically detects image sequences (DPX/TIFF/EXR/PNG/JPG) dumped by DaVinci Resolve,
+merges them with available or detected audio into a high-quality H.264 MP4 (NVENC accelerated),
+and cleans up the thousands of temporary frame files.
+"""
+
+import sys
+import os
+import re
+import glob
+import time
+import shutil
+import argparse
+import subprocess
+from pathlib import Path
+from typing import List, Dict, Optional, Tuple
+
+DPX_MAGIC_LE = b"XPDS"
+DPX_MAGIC_BE = b"SDPX"
+
+def is_image_frame(file_path: Path) -> Tuple[bool, str]:
+    """Check magic bytes to determine if file is an image frame."""
+    try:
+        with open(file_path, "rb") as f:
+            header = f.read(16)
+        if header.startswith(DPX_MAGIC_LE) or header.startswith(DPX_MAGIC_BE):
+            return True, "dpx"
+        if header.startswith(b"\x89PNG"):
+            return True, "png_pipe"
+        if header.startswith(b"\xff\xd8\xff"):
+            return True, "mjpeg"
+        if header.startswith(b"II*\x00") or header.startswith(b"MM\x00*"):
+            return True, "tiff_pipe"
+        if header.startswith(b"\x76\x2f\x31\x01"):
+            return True, "exr_pipe"
+    except Exception:
+        pass
+    return False, ""
+
+def find_sequences(directory: Path) -> Dict[str, List[Path]]:
+    """
+    Finds and groups image sequence files in directory.
+    Matches names like:
+      Timeline 1_00216000.
+      Timeline 1.mov00216000.
+      Clip_0001.dpx
+    """
+    groups: Dict[str, List[Path]] = {}
+    pattern = re.compile(r"^(.*?)(?:_|\.mov)?(\d{4,10})\.?([a-zA-Z0-9]*)$")
+
+    for p in directory.iterdir():
+        if not p.is_file():
+            continue
+        m = pattern.match(p.name)
+        if not m:
+            continue
+
+        prefix = m.group(1).rstrip("._")
+        if not prefix:
+            prefix = "Sequence"
+
+        groups.setdefault(prefix, []).append(p)
+
+    valid_groups = {}
+    for prefix, files in groups.items():
+        if len(files) < 10:
+            continue
+        # Verify first file is an image
+        sample = files[0]
+        is_img, _ = is_image_frame(sample)
+        if is_img:
+            def get_frame_num(path: Path) -> int:
+                match = re.search(r"(\d{4,10})", path.name)
+                return int(match.group(1)) if match else 0
+
+            sorted_files = sorted(files, key=get_frame_num)
+            valid_groups[prefix] = sorted_files
+
+    return valid_groups
+
+def find_best_audio(directory: Path, base_name: str) -> Optional[Path]:
+    """Search for matching or recent audio files in directory."""
+    for ext in [".wav", ".mp3", ".aac", ".m4a", ".flac", ".ogg"]:
+        cand = directory / f"{base_name}{ext}"
+        if cand.exists():
+            return cand
+        cand = directory / f"{base_name.replace('_', ' ')}{ext}"
+        if cand.exists():
+            return cand
+
+    audios = []
+    for ext in ["*.wav", "*.mp3", "*.aac", "*.m4a", "*.flac"]:
+        audios.extend(directory.glob(ext))
+
+    audios = [a for a in audios if not a.name.startswith(".")]
+    if audios:
+        audios.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        return audios[0]
+
+    return None
+
+def notify(title: str, message: str, urgency: str = "normal"):
+    """Send desktop notification."""
+    try:
+        subprocess.run(["notify-send", "-a", "DaVinci Stitcher", "-u", urgency, title, message], check=False)
+    except Exception:
+        pass
+
+def stitch_sequence(prefix: str, files: List[Path], output_dir: Path, audio_file: Optional[Path] = None, fps: int = 60, delete_source: bool = True) -> Optional[Path]:
+    total_frames = len(files)
+    sample = files[0]
+    _, vcodec = is_image_frame(sample)
+    if not vcodec:
+        vcodec = "dpx"
+
+    clean_prefix = re.sub(r"[^\w\-_ ]", "_", prefix).strip()
+    out_file = output_dir / f"{clean_prefix}_ready.mp4"
+
+    total_bytes = sum(f.stat().st_size for f in files)
+    total_mb = total_bytes / (1024 * 1024)
+    total_gb = total_mb / 1024
+
+    size_str = f"{total_gb:.1f} ГБ" if total_gb >= 1.0 else f"{total_mb:.0f} МБ"
+    print(f"\n[🚀] Найдена серия кадров: '{prefix}' ({total_frames} кадров, {size_str})")
+    print(f"[*] Формат кадров: {vcodec.upper()} @ {fps} fps")
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "image2pipe", "-vcodec", vcodec, "-framerate", str(fps), "-i", "-"
+    ]
+
+    if audio_file and audio_file.exists():
+        print(f"[*] Добавление звука: {audio_file.name}")
+        cmd.extend(["-i", str(audio_file)])
+        cmd.extend(["-c:a", "aac", "-b:a", "320k", "-shortest"])
+    else:
+        print("[*] Звуковая дорожка не найдена (видео будет без звука)")
+
+    has_nvenc = False
+    try:
+        chk = subprocess.run(["ffmpeg", "-encoders"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        if "h264_nvenc" in chk.stdout:
+            has_nvenc = True
+    except Exception:
+        pass
+
+    if has_nvenc:
+        cmd.extend(["-c:v", "h264_nvenc", "-preset", "p4", "-b:v", "18M", "-pix_fmt", "yuv420p"])
+    else:
+        cmd.extend(["-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p"])
+
+    cmd.append(str(out_file))
+
+    notify("DaVinci Stitcher", f"Сборка {total_frames} кадров ({size_str}) в {out_file.name}...", "low")
+    print(f"[*] Запуск сборки в {out_file}...")
+
+    t0 = time.time()
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+    try:
+        for idx, fpath in enumerate(files):
+            with open(fpath, "rb") as fp:
+                proc.stdin.write(fp.read())
+            if (idx + 1) % 300 == 0 or idx == total_frames - 1:
+                pct = int(((idx + 1) / total_frames) * 100)
+                sys.stdout.write(f"\r[>] Прогресс: {pct}% ({idx + 1}/{total_frames} кадров)")
+                sys.stdout.flush()
+        proc.stdin.close()
+        proc.wait()
+    except Exception as e:
+        proc.kill()
+        print(f"\n[❌] Ошибка при передаче кадров: {e}")
+        return None
+
+    elapsed = time.time() - t0
+    sys.stdout.write("\n")
+
+    if proc.returncode != 0 or not out_file.exists() or out_file.stat().st_size == 0:
+        err = proc.stderr.read().decode("utf-8", errors="replace")
+        print(f"[❌] Ошибка ffmpeg (код {proc.returncode}):\n{err[-500:]}")
+        notify("DaVinci Stitcher", "Ошибка при сборке видео!", "critical")
+        return None
+
+    out_mb = out_file.stat().st_size / (1024 * 1024)
+    fps_speed = total_frames / elapsed if elapsed > 0 else 0
+    print(f"[✅] Успешно собрано: {out_file.name} ({out_mb:.1f} МБ) за {elapsed:.1f} сек ({fps_speed:.0f} fps)")
+
+    if delete_source:
+        print(f"[*] Очистка {total_frames} временных кадров ({size_str})...")
+        deleted_count = 0
+        for fpath in files:
+            try:
+                fpath.unlink()
+                deleted_count += 1
+            except Exception:
+                pass
+        print(f"[🧹] Удалено {deleted_count} файлов. Освобождено {size_str} места на диске!")
+        notify("🎉 DaVinci Видео готово!", f"Файл: {out_file.name} ({out_mb:.0f} МБ)\nУдалено {deleted_count} кадров ({size_str})", "normal")
+    else:
+        notify("🎉 DaVinci Видео готово!", f"Файл: {out_file.name} ({out_mb:.0f} МБ)", "normal")
+
+    return out_file
+
+def main():
+    parser = argparse.ArgumentParser(description="Сборка серии кадров DaVinci Resolve в один MP4")
+    parser.add_argument("path", nargs="?", default=str(Path.home() / "Videos"), help="Папка для поиска кадров (по умолчанию ~/Videos)")
+    parser.add_argument("--audio", "-a", type=str, default=None, help="Путь к аудиофайлу")
+    parser.add_argument("--fps", type=int, default=60, help="Частота кадров (по умолчанию 60)")
+    parser.add_argument("--keep", action="store_true", help="Не удалять исходные файлы кадров")
+    args = parser.parse_args()
+
+    target_dir = Path(args.path).resolve()
+    if not target_dir.exists():
+        print(f"[❌] Папка не найдена: {target_dir}")
+        sys.exit(1)
+
+    print(f"🔍 Поиск серий кадров DaVinci в: {target_dir}")
+    sequences = find_sequences(target_dir)
+
+    if not sequences:
+        alt_dirs = [Path.cwd(), Path.home()]
+        for alt in alt_dirs:
+            if alt != target_dir:
+                alt_seq = find_sequences(alt)
+                if alt_seq:
+                    sequences = alt_seq
+                    target_dir = alt
+                    print(f"🔍 Найдено в альтернативной папке: {target_dir}")
+                    break
+
+    if not sequences:
+        print("[ℹ️] Серий кадров DaVinci не обнаружено. Папка чистая.")
+        sys.exit(0)
+
+    audio_path = Path(args.audio).resolve() if args.audio else None
+
+    for prefix, files in sequences.items():
+        aud = audio_path if audio_path else find_best_audio(target_dir, prefix)
+        stitch_sequence(
+            prefix=prefix,
+            files=files,
+            output_dir=target_dir,
+            audio_file=aud,
+            fps=args.fps,
+            delete_source=not args.keep
+        )
+
+if __name__ == "__main__":
+    main()

@@ -340,6 +340,8 @@ binds {
     Mod+N { spawn "nautilus"; }
     Mod+O hotkey-overlay-title="Open Obsidian Vault" { spawn-sh "~/.local/bin/obsidian"; }
     Mod+M hotkey-overlay-title="Open YouTube Music" { spawn-sh "~/.local/bin/yt-music"; }
+    Mod+Y hotkey-overlay-title="Phonograph Lyrics Player" { spawn "kitty" "--title=lines" "-e" "/home/ym1co/.local/bin/lines"; }
+    Mod+B hotkey-overlay-title="Steampunk Boiler Telemetry" { spawn "kitty" "--title=boiler" "-e" "/home/ym1co/.local/bin/boiler"; }
     Mod+P hotkey-overlay-title="Study Checkpoint Quiz" { spawn "~/.local/bin/study-quiz"; }
     Mod+Shift+P hotkey-overlay-title="Cross-Quiz Blitz GUI (All Subjects)" { spawn "~/.local/bin/cross-quiz"; }
     Page_Down allow-when-locked=true hotkey-overlay-title="Toggle Microphone Mute" { spawn-sh "~/.local/bin/toggle-mic"; }
@@ -597,6 +599,20 @@ window-rule {
     match app-id=r#"^io\.github\.niri\.screenshare\.picker$"#
     open-floating true
     open-focused true
+}
+
+window-rule {
+    match app-id=r#"^kitty$"# title=r#"^boiler$"#
+    open-floating true
+    default-column-width { fixed 1000; }
+    default-window-height { fixed 680; }
+}
+
+window-rule {
+    match app-id=r#"^kitty$"# title=r#"^lines$"#
+    open-floating true
+    default-column-width { fixed 1100; }
+    default-window-height { fixed 640; }
 }
 
 debug {

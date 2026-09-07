@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+PANEL_DIR="/home/ym1co/.local/share/DaVinciResolve/DaVinci Control Panels Setup"
+export LD_LIBRARY_PATH="$PANEL_DIR:$LD_LIBRARY_PATH"
+export QT_QPA_PLATFORM=xcb
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+cd "$PANEL_DIR"
+exec "$PANEL_DIR/DaVinci Control Panels Setup" "$@"

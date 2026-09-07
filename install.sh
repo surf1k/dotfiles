@@ -61,6 +61,7 @@ CONFIG_ITEMS=(
     "OpenRGB"
     "YouTube Music Desktop App"
     "vesktop"
+    "vesktop-flags.conf"
 )
 
 for item in "${CONFIG_ITEMS[@]}"; do

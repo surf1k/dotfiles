@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+if [ -z "$1" ]; then
+    echo "Использование: davinci-convert <файл.mp4> ..."
+    exit 1
+fi
+
+for file in "$@"; do
+    [ -f "$file" ] || continue
+    dir=$(dirname "$file")
+    filename=$(basename "$file")
+    base="${filename%.*}"
+    out="${dir}/${base}.mov"
+    echo "==> Конвертация $filename в $out (DNxHR LB)..."
+    nice -n 19 ionice -c 3 ffmpeg -y -i "$file" -c:v dnxhd -profile:v dnxhr_lb -pix_fmt yuv422p -c:a pcm_s16le "$out"
+    echo "==> Готово: $out"
+done

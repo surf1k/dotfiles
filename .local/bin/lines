@@ -2,11 +2,13 @@
 """
 lines - Steampunk Phonograph Lyrics Display for CLI
 Features:
-- Real-time synced lyrics from LRCLIB (with offline cache & fallback)
+- Real-time synced lyrics from LRCLIB (with offline cache, Genius fallback & local files)
 - Steampunk aesthetic: Emerald (#78c45d) & Gold (#dec07e)
 - Smooth animated rotating interlocking Braille gears
-- Bold, soft, gradient-faded typography for active and surrounding lines
-- MPRIS / playerctl integration with play/pause/next/prev controls
+- Bold, soft typography with Grand Plaque stage & procedural acoustic waveform
+- Steampunk Pressure Manometer, Steam Burst valve [b], and Boiler telemetry
+- MPRIS / playerctl integration with playback controls
+- Bulletproof anti-aliased viewport rendering with zero border duplication or scroll jitter
 """
 
 import sys
@@ -26,41 +28,42 @@ import urllib.parse
 from pathlib import Path
 
 # --- ANSI Styling & Theme Palette ---
-RESET = "\033[0m"
-BOLD = "\033[1m"
-DIM = "\033[2m"
-ITALIC = "\033[3m"
+RESET = "[0m"
+BOLD = "[1m"
+DIM = "[2m"
+ITALIC = "[3m"
 
 # Palette: Emerald & Gold
-GOLD = "\033[38;2;222;192;126m"        # #dec07e
-GOLD_BRIGHT = "\033[1;38;2;255;235;160m" # #ffeba0
-GOLD_MUTED = "\033[38;2;170;148;95m"    # Faded brass
-EMERALD = "\033[38;2;120;196;93m"      # #78c45d
-EMERALD_BRIGHT = "\033[1;38;2;155;235;125m"
-EMERALD_MUTED = "\033[38;2;90;140;72m"
-BORDER_COLOR = "\033[38;2;95;110;85m"   # Steampunk bronze-slate border
-PILL_BG = "\033[48;2;24;38;20m"        # Soft dark emerald background for active line
-DARK_BG = "\033[48;2;18;26;16m"
+GOLD = "[38;2;222;192;126m"        # #dec07e
+GOLD_BRIGHT = "[1;38;2;255;235;160m" # #ffeba0
+GOLD_MUTED = "[38;2;170;148;95m"    # Faded brass
+EMERALD = "[38;2;120;196;93m"      # #78c45d
+EMERALD_BRIGHT = "[1;38;2;155;235;125m"
+EMERALD_MUTED = "[38;2;90;140;72m"
+BORDER_COLOR = "[38;2;95;110;85m"   # Steampunk bronze-slate border
+PILL_BG = "[48;2;24;38;20m"        # Soft dark emerald background for active line
+DARK_BG = "[48;2;18;26;16m"
+STEAM_COLOR = "[38;2;190;215;210m"  # Vapor mist
 
 # Gradients for past lines (fading into dark moss)
 PAST_GRADIENT = [
-    "\033[38;2;140;195;120m",  # -1 line
-    "\033[38;2;105;155;92m",   # -2 line
-    "\033[38;2;75;115;68m",    # -3 line
-    "\033[38;2;52;80;48m",     # -4 line
-    "\033[38;2;38;58;35m",     # -5+ line
+    "[38;2;140;195;120m",  # -1 line
+    "[38;2;105;155;92m",   # -2 line
+    "[38;2;75;115;68m",    # -3 line
+    "[38;2;52;80;48m",     # -4 line
+    "[38;2;38;58;35m",     # -5+ line
 ]
 
 # Gradients for upcoming lines (fading into dark brass)
 FUTURE_GRADIENT = [
-    "\033[38;2;210;182;120m",  # +1 line
-    "\033[38;2;165;142;92m",   # +2 line
-    "\033[38;2;125;108;70m",   # +3 line
-    "\033[38;2;90;78;50m",     # +4 line
-    "\033[38;2;65;55;35m",     # +5+ line
+    "[38;2;210;182;120m",  # +1 line
+    "[38;2;165;142;92m",   # +2 line
+    "[38;2;125;108;70m",   # +3 line
+    "[38;2;90;78;50m",     # +4 line
+    "[38;2;65;55;35m",     # +5+ line
 ]
 
-ANSI_REGEX = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
+ANSI_REGEX = re.compile(r'\[[0-9;]*[a-zA-Z]')
 
 def strip_ansi(s):
     return ANSI_REGEX.sub('', s)
@@ -68,10 +71,32 @@ def strip_ansi(s):
 def visible_len(s):
     return len(strip_ansi(s))
 
+def truncate_visible(s, max_len):
+    """Truncate string s while strictly respecting ANSI sequences so visible length <= max_len."""
+    if visible_len(s) <= max_len:
+        return s
+    res = []
+    cur_len = 0
+    i = 0
+    while i < len(s):
+        m = ANSI_REGEX.match(s, i)
+        if m:
+            res.append(m.group(0))
+            i = m.end()
+        else:
+            if cur_len + 1 > max_len - 1:
+                res.append("…")
+                res.append(RESET)
+                break
+            res.append(s[i])
+            cur_len += 1
+            i += 1
+    return "".join(res)
+
 def center_text(s, width):
     vlen = visible_len(s)
     if vlen >= width:
-        return s
+        return truncate_visible(s, width)
     pad = (width - vlen) // 2
     return " " * pad + s + " " * (width - vlen - pad)
 
@@ -89,7 +114,6 @@ def get_cache_path(artist, title):
 def clean_search_term(s):
     if not s:
         return ""
-    # Remove (feat. ...), (Official Video), [4K], etc.
     s = re.sub(r'[\(\[\{].*?[\)\]\}]', '', s)
     s = re.sub(r'\s+-\s+.*$', '', s)
     s = re.sub(r'\s+[fF][eE]?[aA]?[tT]\.?\s+.*$', '', s)
@@ -99,7 +123,7 @@ def normalize_str(s):
     if not s:
         return ""
     s = s.lower()
-    s = re.sub(r'[\(\)\[\]\{\}\.,;:!?\-_/&+=~`\'"«»]', ' ', s)
+    s = re.sub(r'''[()\[\]{}.,;:!?\-_/&+=~`'"«»]''', ' ', s)
     return ' '.join(s.split())
 
 def extract_first_artist(artist_str):
@@ -125,17 +149,11 @@ def is_artist_match(expected_artist, candidate_artist):
         return False
     exp_norm = normalize_str(expected_artist)
     cand_norm = normalize_str(candidate_artist)
-    
     if exp_norm in cand_norm or cand_norm in exp_norm:
         return True
-        
     exp_tokens = extract_artist_tokens(expected_artist)
     cand_tokens = extract_artist_tokens(candidate_artist)
-    
-    if exp_tokens & cand_tokens:
-        return True
-        
-    return False
+    return bool(exp_tokens & cand_tokens)
 
 def is_title_match(expected_title, candidate_title):
     if not expected_title or not candidate_title:
@@ -151,11 +169,9 @@ def is_title_match(expected_title, candidate_title):
     return False
 
 def check_local_lyrics(artist, title):
-    """Проверяет локальную папку ~/.config/lines/lyrics/ на наличие файла .lrc или .txt"""
     clean_t = clean_search_term(title)
     first_a = extract_first_artist(artist)
     clean_a = clean_search_term(artist)
-    
     candidates = [
         LOCAL_LYRICS_DIR / f"{first_a} - {clean_t}.lrc",
         LOCAL_LYRICS_DIR / f"{first_a} - {clean_t}.txt",
@@ -222,12 +238,10 @@ def fetch_genius_lyrics(artist, title):
     return None
 
 def fetch_lyrics(artist, title, duration=0):
-    # 0. Проверяем локальный файл пользователя
     local_res = check_local_lyrics(artist, title)
     if local_res:
         return local_res
 
-    # 1. Проверяем кэш (с обязательной валидацией исполнителя и трека)
     cache_file = get_cache_path(artist, title)
     if cache_file.exists():
         try:
@@ -238,7 +252,6 @@ def fetch_lyrics(artist, title, duration=0):
                 if is_artist_match(artist, c_art) and is_title_match(title, c_trk):
                     return cached
                 else:
-                    # Кэш был от другого автора - удаляем испорченный кэш
                     cache_file.unlink(missing_ok=True)
         except Exception:
             pass
@@ -248,135 +261,129 @@ def fetch_lyrics(artist, title, duration=0):
     clean_a = clean_search_term(artist)
     first_a = extract_first_artist(artist)
 
-    # 2. LRCLIB search (только с жесткой валидацией автора!)
-    queries = [
-        f"{first_a} {clean_t}",
-        f"{clean_a} {clean_t}",
-        f"{clean_t} {first_a}",
-        clean_t
+    candidates_search = [
+        {"track_name": title, "artist_name": first_a},
+        {"track_name": clean_t, "artist_name": first_a},
+        {"track_name": clean_t, "artist_name": clean_a},
+        {"track_name": title, "artist_name": clean_a},
+        {"track_name": title, "artist_name": artist},
+        {"q": f"{first_a} {clean_t}"},
+        {"q": f"{clean_a} {clean_t}"},
     ]
-    
-    seen_queries = set()
-    for q in queries:
-        q = q.strip()
-        if not q or q in seen_queries:
-            continue
-        seen_queries.add(q)
-        try:
-            url = 'https://lrclib.net/api/search?' + urllib.parse.urlencode({'q': q})
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=4) as r:
-                data = json.loads(r.read())
-                if data and isinstance(data, list):
-                    for item in data:
-                        cand_art = item.get('artistName', '')
-                        cand_trk = item.get('trackName', '')
-                        # СТРОГАЯ ВАЛИДАЦИЯ: и автор, и название трека должны совпадать!
-                        if is_artist_match(artist, cand_art) and is_title_match(title, cand_trk):
-                            res = {
-                                "synced": item.get('syncedLyrics'),
-                                "plain": item.get('plainLyrics'),
-                                "track": cand_trk,
-                                "artist": cand_art,
-                                "source": "LRCLIB"
-                            }
-                            if res["synced"] or res["plain"]:
-                                with open(cache_file, 'w', encoding='utf-8') as f:
-                                    json.dump(res, f, ensure_ascii=False)
-                                return res
-        except Exception:
-            pass
 
-    # 3. Genius search
+    for params in candidates_search:
+        try:
+            url = "https://lrclib.net/api/get?" + urllib.parse.urlencode(params) if "q" not in params else "https://lrclib.net/api/search?" + urllib.parse.urlencode(params)
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=3.5) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                if isinstance(data, list):
+                    matched_items = []
+                    for it in data:
+                        it_art = it.get('artistName', '')
+                        it_trk = it.get('trackName', '')
+                        if is_artist_match(artist, it_art) and is_title_match(title, it_trk):
+                            matched_items.append(it)
+                    item = None
+                    if matched_items:
+                        synced = [it for it in matched_items if it.get('syncedLyrics')]
+                        item = synced[0] if synced else matched_items[0]
+                else:
+                    item = data
+                    it_art = item.get('artistName', '')
+                    it_trk = item.get('trackName', '')
+                    if not (is_artist_match(artist, it_art) and is_title_match(title, it_trk)):
+                        item = None
+
+                if item and (item.get('syncedLyrics') or item.get('plainLyrics')):
+                    result = {
+                        "synced": item.get('syncedLyrics'),
+                        "plain": item.get('plainLyrics'),
+                        "track": item.get('trackName', title),
+                        "artist": item.get('artistName', artist),
+                        "source": "LRCLIB"
+                    }
+                    try:
+                        with open(cache_file, 'w', encoding='utf-8') as f:
+                            json.dump(result, f, ensure_ascii=False)
+                    except Exception:
+                        pass
+                    return result
+        except Exception:
+            continue
+
     genius_res = fetch_genius_lyrics(artist, title)
     if genius_res:
-        with open(cache_file, 'w', encoding='utf-8') as f:
-            json.dump(genius_res, f, ensure_ascii=False)
-        return genius_res
-
-    # 4. Fallback: lyrics.ovh (только с валидацией)
-    for a_try in [first_a, clean_a]:
-        if not a_try: continue
         try:
-            ovh_url = f"https://api.lyrics.ovh/v1/{urllib.parse.quote(a_try)}/{urllib.parse.quote(clean_t)}"
-            req = urllib.request.Request(ovh_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=4) as r:
-                data = json.loads(r.read())
-                lyrics = data.get('lyrics')
-                if lyrics:
-                    res = {"synced": None, "plain": lyrics, "track": clean_t, "artist": a_try, "source": "LYRICS.OVH"}
-                    with open(cache_file, 'w', encoding='utf-8') as f:
-                        json.dump(res, f, ensure_ascii=False)
-                    return res
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(genius_res, f, ensure_ascii=False)
         except Exception:
             pass
+        return genius_res
 
     return None
 
 def parse_lrc(lrc_text):
     lines = []
-    pattern = re.compile(r'\[(\d{1,2}):(\d{2}(?:\.\d+)?)\](.*)')
-    for l in lrc_text.splitlines():
-        l = l.strip()
-        m = pattern.match(l)
-        if m:
-            sec = int(m.group(1)) * 60 + float(m.group(2))
-            text = m.group(3).strip()
-            if text:
-                lines.append((sec, text))
+    time_tag_pattern = re.compile(r'\[(\d{1,2}):(\d{2}(?:\.\d+)?)\]')
+    for raw in lrc_text.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        matches = list(time_tag_pattern.finditer(raw))
+        if not matches:
+            continue
+        text = time_tag_pattern.sub('', raw).strip()
+        for m in matches:
+            mins = float(m.group(1))
+            secs = float(m.group(2))
+            total_sec = mins * 60.0 + secs
+            lines.append((total_sec, text))
     lines.sort(key=lambda x: x[0])
     return lines
 
-def parse_plain(plain_text, duration=180.0):
-    raw = [l.strip() for l in plain_text.splitlines() if l.strip()]
-    if not raw:
+def parse_plain(plain_text, duration):
+    raw_lines = [l.strip() for l in plain_text.splitlines() if l.strip()]
+    if not raw_lines:
         return []
-    dur = max(30.0, duration or 180.0)
-    step = dur / max(1, len(raw))
-    return [(i * step, line) for i, line in enumerate(raw)]
+    step = (duration / len(raw_lines)) if duration > 0 else 4.0
+    return [(i * step, text) for i, text in enumerate(raw_lines)]
 
-# --- Pre-rendered Interlocking Braille Gears ---
+# --- Steampunk Clockwork Engine (Braille Gears) ---
 class SteampunkGears:
-    def __init__(self, size_w=28, size_h=8):
-        self.size_w = size_w
-        self.size_h = size_h
+    def __init__(self):
+        self.size_w = 26
+        self.size_h = 8
         self.frames = []
-        self._pre_render_frames(num_frames=24)
+        self.num_frames = 24
+        self._generate_frames()
 
-    def _pre_render_frames(self, num_frames=24):
-        pw = self.size_w * 2
-        ph = self.size_h * 4
-
-        # Gear 1 (Main Gold Cog)
-        g1_x = pw * 0.32
-        g1_y = ph * 0.5
-        g1_r = 11.0
-        g1_teeth = 8
-        g1_depth = 2.8
-
-        # Gear 2 (Intermeshed Emerald Cog)
-        g2_r = 7.5
-        g2_teeth = 6
-        g2_depth = 2.4
-        dist = g1_r + g2_r + 0.5
-        g2_x = g1_x + dist
-        g2_y = ph * 0.5
-
+    def _generate_frames(self):
+        pix_w = self.size_w * 2
+        pix_h = self.size_h * 4
         dot_map = [
             [0x01, 0x08],
             [0x02, 0x10],
             [0x04, 0x20],
             [0x40, 0x80]
         ]
+        g1_x, g1_y = 17, 16
+        g1_r = 11.5
+        g1_teeth = 8
+        g1_depth = 3.5
 
-        for f in range(num_frames):
-            angle = (f / num_frames) * (2 * math.pi / g1_teeth)
-            g2_angle = -angle * (g1_teeth / g2_teeth) + math.pi / g2_teeth
+        g2_x, g2_y = 35, 16
+        g2_r = 8.5
+        g2_teeth = 6
+        g2_depth = 3.2
 
-            pixels = [[0 for _ in range(pw)] for _ in range(ph)]
-            for y in range(ph):
-                for x in range(pw):
-                    # Check Gear 1
+        for f in range(self.num_frames):
+            angle = (f / self.num_frames) * (2 * math.pi / g1_teeth)
+            g2_angle = -angle * (g1_teeth / g2_teeth) + (math.pi / g2_teeth)
+
+            pixels = [[0] * pix_w for _ in range(pix_h)]
+            for y in range(pix_h):
+                for x in range(pix_w):
                     dx1 = x - g1_x
                     dy1 = y - g1_y
                     r1 = math.sqrt(dx1*dx1 + dy1*dy1)
@@ -388,7 +395,6 @@ class SteampunkGears:
                             pixels[y][x] = 1
                             continue
 
-                    # Check Gear 2
                     dx2 = x - g2_x
                     dy2 = y - g2_y
                     r2 = math.sqrt(dx2*dx2 + dy2*dy2)
@@ -400,7 +406,6 @@ class SteampunkGears:
                             pixels[y][x] = 2
                             continue
 
-            # Convert to colored Braille lines
             frame_lines = []
             for ch_y in range(self.size_h):
                 line = ""
@@ -447,19 +452,21 @@ class LinesApp:
         self.album = ""
         self.last_poll_time = time.time()
         
-        # Current lyrics state
+        # Lyrics state
         self.current_song_key = None
         self.lyrics_lines = []
         self.is_synced = False
         self.manual_offset = 0.0
         self.lyrics_loaded = False
         self.lyrics_error = None
-        self.single_line_only = True  # Прошлые и будущие строки скрыты!
+        self.single_line_only = True
         
-        # Terminal size
+        # Steampunk Steam Burst state
+        self.steam_burst_time = 0.0
+        
+        # Terminal size & state
         self.cols, self.rows = self._get_term_size()
-        
-        # Setup raw terminal
+        self.need_clear = True
         self.old_termios = None
         self._setup_terminal()
 
@@ -467,7 +474,7 @@ class LinesApp:
         try:
             import shutil
             ts = shutil.get_terminal_size((80, 24))
-            return ts.columns, ts.lines
+            return max(30, ts.columns), max(10, ts.lines)
         except Exception:
             return 80, 24
 
@@ -478,13 +485,11 @@ class LinesApp:
                 tty.setcbreak(sys.stdin.fileno())
             except Exception:
                 pass
-        # Alternate screen, hide cursor
-        sys.stdout.write("\033[?1049h\033[?25l")
+        sys.stdout.write("[?1049h[?25l[2J")
         sys.stdout.flush()
 
     def _restore_terminal(self):
-        # Show cursor, restore screen
-        sys.stdout.write("\033[?25h\033[?1049l")
+        sys.stdout.write("[?25h[?1049l")
         sys.stdout.flush()
         if self.old_termios and sys.stdin.isatty():
             try:
@@ -494,17 +499,17 @@ class LinesApp:
 
     def handle_resize(self, sig, frame):
         self.cols, self.rows = self._get_term_size()
+        self.need_clear = True
 
     def poll_player(self):
         try:
             out = subprocess.check_output(
-                ['playerctl', 'metadata', '--format', '{{status}}\t{{position}}\t{{mpris:length}}\t{{artist}}\t{{title}}\t{{album}}'],
+                ['playerctl', 'metadata', '--format', '{{status}}	{{position}}	{{mpris:length}}	{{artist}}	{{title}}	{{album}}'],
                 text=True, stderr=subprocess.DEVNULL
             ).strip()
-            parts = out.split('\t')
+            parts = out.split('	')
             if len(parts) >= 5:
                 self.status = parts[0]
-                # microsecs to seconds
                 pos_raw = float(parts[1]) if parts[1] else 0.0
                 self.position = pos_raw / 1_000_000.0
                 dur_raw = float(parts[2]) if parts[2] else 0.0
@@ -527,7 +532,6 @@ class LinesApp:
             self.lyrics_error = None
             self.lyrics_lines = []
             
-            # Fetch lyrics
             res = fetch_lyrics(self.artist, self.title, self.duration)
             if res and (res.get("synced") or res.get("plain")):
                 if res.get("synced"):
@@ -564,18 +568,16 @@ class LinesApp:
         except Exception:
             pass
         self._setup_terminal()
-        # Invalidate cache and reload
         cache_file = get_cache_path(self.artist, self.title)
         if cache_file.exists():
             cache_file.unlink(missing_ok=True)
         self.current_song_key = None
 
     def handle_input(self):
-        # Non-blocking check for keypress
         while select.select([sys.stdin], [], [], 0)[0]:
             try:
                 ch = sys.stdin.read(1)
-                if ch in ['q', 'Q', '\x1b', '\x03']: # q, Esc, Ctrl+C
+                if ch in ['q', 'Q', '', '']:
                     self.running = False
                     return
                 elif ch == ' ':
@@ -588,10 +590,12 @@ class LinesApp:
                     self._edit_lyrics()
                 elif ch in ['v', 'V']:
                     self.single_line_only = not self.single_line_only
+                elif ch in ['b', 'B']:
+                    # Steam blow-off valve release!
+                    self.steam_burst_time = time.time()
                 elif ch == 'g':
                     self.show_gears = not self.show_gears
                 elif ch == 'r':
-                    # Force reload lyrics
                     if self.artist and self.title:
                         cache_file = get_cache_path(self.artist, self.title)
                         if cache_file.exists():
@@ -603,31 +607,38 @@ class LinesApp:
                     self.manual_offset += 1.0
                 elif ch == '0':
                     self.manual_offset = 0.0
-                elif ch == '\x1b': # Handle arrow keys
+                elif ch == '':
                     seq = sys.stdin.read(2)
-                    if seq == '[A': # Up
+                    if seq == '[A':
                         self.manual_offset -= 1.0
-                    elif seq == '[B': # Down
+                    elif seq == '[B':
                         self.manual_offset += 1.0
             except Exception:
                 pass
 
     def render(self):
-        # Current effective time
+        # Prevent terminal autowrap and scrolling by clamping width and line count
+        term_w = self.cols
+        term_h = self.rows
+        
+        # Max line width is STRICTLY term_w - 1 (never touch the rightmost terminal column!)
+        w = max(38, term_w - 1)
+        h = max(10, term_h)
+
+        if self.need_clear:
+            sys.stdout.write("[2J[H")
+            self.need_clear = False
+
+        # Current effective playback time
         eff_pos = self.position
         if self.status == "Playing":
             eff_pos += (time.time() - self.last_poll_time)
         eff_pos += self.manual_offset
         eff_pos = max(0.0, eff_pos)
 
-        w = self.cols
-        h = self.rows
         buf = []
 
         # 1. Header Box
-        spin_icons = ["⚙", "󰒓", "󰏖", "⚙"]
-        current_spin = spin_icons[int(time.time() * 3) % len(spin_icons)]
-        
         status_badge = f"{EMERALD_BRIGHT}[ ⏵ PLAYING ]{RESET}" if self.status == "Playing" else f"{GOLD_MUTED}[ ⏸ PAUSED ]{RESET}"
         if self.status == "Stopped":
             status_badge = f"{BORDER_COLOR}[ ⏹ STOPPED ]{RESET}"
@@ -636,39 +647,57 @@ class LinesApp:
         min_tot, sec_tot = divmod(int(self.duration), 60)
         time_str = f"{min_cur:02d}:{sec_cur:02d} / {min_tot:02d}:{sec_tot:02d}"
 
-        # Progress percentage
         pct = int((eff_pos / self.duration * 100)) if self.duration > 0 else 0
         pct = max(0, min(100, pct))
 
-        header_title = f"{GOLD} ⚙ PHONOGRAPH LINES ⚙ {RESET}"
-        line_top = f"{BORDER_COLOR}╭──{RESET}{header_title}{BORDER_COLOR}" + ("━" * max(2, w - visible_len(header_title) - 6)) + f"╮{RESET}"
+        # Top border
+        header_title = f" ❖ {GOLD}PHONOGRAPH LINES{BORDER_COLOR} ❖ "
+        vlen_ht = visible_len(header_title)
+        dashes_top = max(2, w - 2 - vlen_ht)
+        d_left = 2
+        d_right = dashes_top - d_left
+        line_top = f"{BORDER_COLOR}╭" + ("─" * d_left) + header_title + ("─" * max(0, d_right)) + f"╮{RESET}"
         buf.append(line_top)
 
-        # Track info line
-        track_str = f" {EMERALD_BRIGHT}{self.title or 'Нет трека'}{RESET} {GOLD_MUTED}•{RESET} {GOLD}{self.artist or 'Ожидание MPRIS...'}{RESET}"
+        # Track info line with strict length limits
         right_info = f"{time_str}  {status_badge} "
-        space_count = max(1, w - visible_len(track_str) - visible_len(right_info) - 2)
-        buf.append(f"{BORDER_COLOR}│{RESET}{track_str}{' ' * space_count}{right_info}{BORDER_COLOR}│{RESET}")
+        right_vlen = visible_len(right_info)
+        max_track_vlen = max(12, w - right_vlen - 5)
+        
+        raw_track = f"{self.title or 'Нет трека'} • {self.artist or 'Ожидание MPRIS...'}"
+        styled_track = f" {EMERALD_BRIGHT}{truncate_visible(self.title or 'Нет трека', max_track_vlen // 2)}{RESET} {GOLD_MUTED}•{RESET} {GOLD}{truncate_visible(self.artist or 'Ожидание MPRIS...', max_track_vlen // 2)}{RESET}"
+        
+        track_vlen = visible_len(styled_track)
+        space_count = max(1, w - 2 - track_vlen - right_vlen)
+        buf.append(f"{BORDER_COLOR}│{RESET}{styled_track}{' ' * space_count}{right_info}{BORDER_COLOR}│{RESET}")
 
-        # Progress bar
-        bar_len = max(10, w - 24)
+        # Progress bar line
+        bar_len = max(8, min(40, w - 30))
         filled = int(bar_len * (pct / 100.0))
         knob = f"{GOLD_BRIGHT}⚙{RESET}" if self.status == "Playing" else f"{GOLD_MUTED}•{RESET}"
         bar = f"{EMERALD}{'━' * filled}{RESET}{knob}{BORDER_COLOR}{'━' * max(0, bar_len - filled - 1)}{RESET}"
-        bar_line = f"  {bar} {GOLD}{pct:3d}%{RESET}"
-        space_bar = max(1, w - visible_len(bar_line) - 3)
+        
+        # Steam Pressure Telemetry in Header
+        is_steam_burst = (time.time() - self.steam_burst_time) < 2.5
+        if is_steam_burst:
+            steam_indicator = f"{EMERALD_BRIGHT}💨 [ BLOW-OFF 3.2 BAR ]{RESET}"
+        else:
+            steam_indicator = f"{GOLD}⚙ [ 2.4 BAR ]{RESET}" if self.status == "Playing" else f"{BORDER_COLOR}⚙ [ 0.0 BAR ]{RESET}"
+            
+        bar_line = f"  {bar} {GOLD}{pct:3d}%{RESET}   {steam_indicator}"
+        space_bar = max(1, w - 2 - visible_len(bar_line))
         buf.append(f"{BORDER_COLOR}│{RESET}{bar_line}{' ' * space_bar}{BORDER_COLOR}│{RESET}")
         buf.append(f"{BORDER_COLOR}╰" + ("─" * (w - 2)) + f"╯{RESET}")
 
-        # 2. Main Area (Split: Left Gears + Right Lyrics, or Stacked)
-        avail_h = max(6, h - 7) # Leave space for header and footer
+        # 2. Main Area Calculations
+        # Reserve: 4 lines (header) + 2 lines (footer) + 1 safety margin = 7 lines
+        avail_h = max(4, h - 7)
+        split_layout = self.show_gears and (w >= 84) and (avail_h >= 11)
         
-        split_layout = self.show_gears and (w >= 88) and (avail_h >= 10)
-        
-        gear_w = 32 if split_layout else 0
-        lyrics_w = w - gear_w - (3 if split_layout else 0)
+        gear_w = 30 if split_layout else 0
+        lyrics_w = max(24, w - gear_w - (3 if split_layout else 0))
 
-        # Calculate Active Lyric Index
+        # Active lyric calculation
         active_idx = -1
         if self.lyrics_lines:
             for i, (t_sec, _) in enumerate(self.lyrics_lines):
@@ -677,44 +706,53 @@ class LinesApp:
                 else:
                     break
 
-        # Generate lyrics lines view
         visible_lyrics_lines = []
 
         if self.single_line_only and self.lyrics_lines:
-            # --- GRAND STEAMPUNK LYRIC STAGE (Крупная карточка активной строки) ---
+            # --- GRAND STEAMPUNK LYRIC STAGE ---
             active_text = ""
             if 0 <= active_idx < len(self.lyrics_lines):
                 active_text = self.lyrics_lines[active_idx][1].strip()
-
             if not active_text:
                 active_text = "♫  ~  ♫"
 
-            card_w = min(max(38, lyrics_w - 6), 66)
-            inner_w = card_w - 4
+            card_w = min(max(32, lyrics_w - 4), 62)
+            inner_w = card_w - 6
 
-            # Аккуратный перенос слов на несколько строк при необходимости
+            # Word wrap within inner_w
             words = active_text.split()
             wrapped_lines = []
             curr = []
             for wd in words:
-                if sum(len(x) for x in curr) + len(curr) + len(wd) <= inner_w - 8:
+                curr_len = sum(len(x) for x in curr) + len(curr) + len(wd)
+                if curr_len <= inner_w:
                     curr.append(wd)
                 else:
-                    wrapped_lines.append(' '.join(curr))
-                    curr = [wd]
+                    if curr:
+                        wrapped_lines.append(' '.join(curr))
+                    # Handle very long words
+                    if len(wd) > inner_w:
+                        wrapped_lines.append(wd[:inner_w])
+                        curr = [wd[inner_w:]]
+                    else:
+                        curr = [wd]
             if curr:
                 wrapped_lines.append(' '.join(curr))
             if not wrapped_lines:
-                wrapped_lines = [active_text]
+                wrapped_lines = [active_text[:inner_w]]
 
-            # Живой волновой акустический визуализатор (Phonograph sound grooves)
+            # Limit wrapped lines to prevent vertical card overflow
+            max_lyr_lines = max(1, avail_h - 7)
+            wrapped_lines = wrapped_lines[:max_lyr_lines]
+
+            # Procedural Acoustic Waveform
             chars = [' ', ' ', '▂', '▃', '▄', '▅', '▆', '▇', '█']
             t_now = time.time()
-            wave_len = min(card_w - 8, 28)
+            wave_len = min(card_w - 8, 26)
             wave_chars = []
             for w_i in range(wave_len):
                 if self.status == "Playing":
-                    v = (math.sin(t_now * 3.5 + w_i * 0.45) + math.cos(t_now * 2.2 - w_i * 0.35) + 2.0) / 4.0
+                    v = (math.sin(t_now * 3.8 + w_i * 0.48) + math.cos(t_now * 2.4 - w_i * 0.36) + 2.0) / 4.0
                 else:
                     v = (math.sin(w_i * 0.3) + 1.2) / 3.0
                 idx = int(v * (len(chars) - 1))
@@ -723,48 +761,51 @@ class LinesApp:
             half_w = wave_len // 2
             styled_wave = f"{EMERALD}{wave_str[:half_w]}{GOLD}{wave_str[half_w:]}{RESET}"
 
-            # Таймкод трека
-            cur_m, cur_s = int(eff_pos // 60), int(eff_pos % 60)
-            tot_m, tot_s = int(self.duration // 60), int(self.duration % 60)
-            time_str = f"{cur_m:02d}:{cur_s:02d} / {tot_m:02d}:{tot_s:02d}"
-            bot_tag = f" {BORDER_COLOR}⚙ {GOLD}[ {time_str} ]{BORDER_COLOR} ⚙ "
-
+            # Plaque top / bottom
             card = []
-            top_title = f" {BORDER_COLOR}❖ {GOLD}PHONOGRAM RECORD{BORDER_COLOR} ❖ "
-            vlen = visible_len(top_title)
-            dashes = max(2, card_w - 2 - vlen)
-            d_left = dashes // 2
-            d_right = dashes - d_left
-            card.append(f"{BORDER_COLOR}╭" + ("─" * d_left) + top_title + ("─" * d_right) + f"╮{RESET}")
-            card.append(f"{BORDER_COLOR}│{' ' * (card_w - 2)}│{RESET}")
+            card_title = f" {BORDER_COLOR}❖ {GOLD}PHONOGRAM RECORD{BORDER_COLOR} ❖ "
+            dashes = max(2, card_w - 2 - visible_len(card_title))
+            d_l = dashes // 2
+            d_r = dashes - d_l
+            card.append(f"{BORDER_COLOR}╭" + ("─" * d_l) + card_title + ("─" * d_r) + f"╮{RESET}")
+            
+            if avail_h >= 10:
+                card.append(f"{BORDER_COLOR}│{' ' * (card_w - 2)}│{RESET}")
 
-            # Отрисовка крупного текста строки
+            # Render Lyric Lines
             for line in wrapped_lines:
                 disp_text = f"« {line} »" if len(wrapped_lines) == 1 else line
-                pill_cap_color = "\033[38;2;28;45;24m"
-                pill_bg_color = "\033[48;2;28;45;24m"
+                pill_cap_color = "[38;2;28;45;24m"
+                pill_bg_color = "[48;2;28;45;24m"
                 pill_content = f"{GOLD_BRIGHT}{BOLD}  {disp_text}  {RESET}"
                 styled_line = f"{pill_cap_color}{pill_bg_color}{pill_content}{pill_cap_color}{RESET}"
+                
                 v_len = visible_len(styled_line)
+                if v_len > card_w - 4:
+                    # Fallback without caps if too wide
+                    styled_line = f"{GOLD_BRIGHT}{BOLD} {disp_text} {RESET}"
+                    v_len = visible_len(styled_line)
+                
                 pad = max(0, (card_w - 2 - v_len) // 2)
                 r_pad = max(0, card_w - 2 - v_len - pad)
                 card.append(f"{BORDER_COLOR}│{RESET}{' ' * pad}{styled_line}{' ' * r_pad}{BORDER_COLOR}│{RESET}")
 
-            card.append(f"{BORDER_COLOR}│{' ' * (card_w - 2)}│{RESET}")
+            if avail_h >= 12:
+                card.append(f"{BORDER_COLOR}│{' ' * (card_w - 2)}│{RESET}")
+                
             w_pad = max(0, (card_w - 2 - wave_len) // 2)
             w_rpad = max(0, card_w - 2 - wave_len - w_pad)
             card.append(f"{BORDER_COLOR}│{RESET}{' ' * w_pad}{styled_wave}{' ' * w_rpad}{BORDER_COLOR}│{RESET}")
 
-            if avail_h >= 14:
-                card.append(f"{BORDER_COLOR}│{' ' * (card_w - 2)}│{RESET}")
+            cur_m, cur_s = int(eff_pos // 60), int(eff_pos % 60)
+            tot_m, tot_s = int(self.duration // 60), int(self.duration % 60)
+            bot_tag = f" {BORDER_COLOR}⚙ {GOLD}[ {cur_m:02d}:{cur_s:02d} / {tot_m:02d}:{tot_s:02d} ]{BORDER_COLOR} ⚙ "
+            b_dashes = max(2, card_w - 2 - visible_len(bot_tag))
+            b_l = b_dashes // 2
+            b_r = b_dashes - b_l
+            card.append(f"{BORDER_COLOR}╰" + ("─" * b_l) + bot_tag + ("─" * b_r) + f"╯{RESET}")
 
-            bot_vlen = visible_len(bot_tag)
-            b_dashes = max(2, card_w - 2 - bot_vlen)
-            b_left = b_dashes // 2
-            b_right = b_dashes - b_left
-            card.append(f"{BORDER_COLOR}╰" + ("─" * b_left) + bot_tag + ("─" * b_right) + f"╯{RESET}")
-
-            # Центрирование карточки по вертикали
+            # Center card in vertical space
             top_pad = max(0, (avail_h - len(card)) // 2)
             visible_lyrics_lines = [""] * top_pad
             for r in card:
@@ -773,7 +814,7 @@ class LinesApp:
                 visible_lyrics_lines.append("")
 
         elif self.lyrics_lines:
-            # --- FULL STREAM VIEW (при нажатии [v]) ---
+            # --- FULL STREAM VIEW [v] ---
             half_h = avail_h // 2
             start_i = active_idx - half_h
             end_i = active_idx + half_h + (1 if avail_h % 2 != 0 else 0)
@@ -787,32 +828,27 @@ class LinesApp:
                 diff = i - active_idx
 
                 if diff == 0:
-                    pill_cap_color = "\033[38;2;28;45;24m"
-                    pill_bg_color = "\033[48;2;28;45;24m"
+                    pill_cap_color = "[38;2;28;45;24m"
+                    pill_bg_color = "[48;2;28;45;24m"
                     pill_inner = f" ✦  {text}  ✦ "
                     styled = f"{pill_cap_color}{pill_bg_color}{GOLD_BRIGHT}{BOLD}{pill_inner}{RESET}{pill_cap_color}{RESET}"
                     visible_lyrics_lines.append(center_text(styled, lyrics_w))
                 elif diff < 0:
                     grad_idx = min(len(PAST_GRADIENT) - 1, abs(diff) - 1)
-                    color = PAST_GRADIENT[grad_idx]
-                    styled = f"{color}{text}{RESET}"
+                    styled = f"{PAST_GRADIENT[grad_idx]}{text}{RESET}"
                     visible_lyrics_lines.append(center_text(styled, lyrics_w))
                 else:
                     grad_idx = min(len(FUTURE_GRADIENT) - 1, diff - 1)
-                    color = FUTURE_GRADIENT[grad_idx]
-                    styled = f"{color}{text}{RESET}"
+                    styled = f"{FUTURE_GRADIENT[grad_idx]}{text}{RESET}"
                     visible_lyrics_lines.append(center_text(styled, lyrics_w))
 
-        # If no lyrics loaded:
         if not self.lyrics_lines:
             visible_lyrics_lines = [""] * avail_h
             msg = self.lyrics_error or "⚙ Ожидание музыки или текста песни..."
-            if self.lyrics_error:
-                sub = "Нажмите [e], чтобы добавить текст вручную, или [r] для повтора"
-            else:
-                sub = "Нажмите [Space] для воспроизведения или [r] для обновления"
-            visible_lyrics_lines[avail_h // 2 - 1] = center_text(f"{GOLD}{msg}{RESET}", lyrics_w)
-            visible_lyrics_lines[avail_h // 2] = center_text(f"{GOLD_MUTED}{sub}{RESET}", lyrics_w)
+            sub = "Нажмите [e], чтобы добавить текст, [b] - выброс пара" if self.lyrics_error else "Нажмите [Space] Воспроизведение, [b] пар, [r] обновить"
+            center_row = max(1, avail_h // 2)
+            visible_lyrics_lines[center_row - 1] = center_text(f"{GOLD}{msg}{RESET}", lyrics_w)
+            visible_lyrics_lines[center_row] = center_text(f"{GOLD_MUTED}{sub}{RESET}", lyrics_w)
 
         # Get gear frame
         gear_lines = self.gears.get_frame(self.gear_frame_idx) if split_layout else []
@@ -822,18 +858,23 @@ class LinesApp:
         # Build Left Steampunk Panel
         left_panel = []
         if split_layout:
-            # Top border
-            left_panel.append(f"{BORDER_COLOR}╭─ {GOLD}⚙ MECHANISM {BORDER_COLOR}" + ("─" * (gear_w - 16)) + f"╮{RESET}")
-            # Gear rows (8 rows)
+            # Dynamic steam puff above gears
+            is_burst = (time.time() - self.steam_burst_time) < 2.5
+            if is_burst:
+                steam_hdr = f"{EMERALD_BRIGHT}💨 VAPOR RELEASE{BORDER_COLOR}"
+            else:
+                puffs = ["~ ° ☁ ~", "° ~ ☁ °", "☁ ~ ° ~", "~ ☁ ° ~"]
+                p_idx = int(time.time() * 3) % len(puffs)
+                steam_hdr = f"{STEAM_COLOR}{puffs[p_idx]}{BORDER_COLOR}"
+                
+            left_panel.append(f"{BORDER_COLOR}╭─ {GOLD}⚙ MECHANISM {BORDER_COLOR}─ {steam_hdr} " + ("─" * max(2, gear_w - 24)) + f"╮{RESET}")
             for gl in gear_lines:
                 left_panel.append(f"{BORDER_COLOR}│{RESET} {gl} {BORDER_COLOR}│{RESET}")
-            
-            # Sub-panel for stats if height permits
-            if avail_h >= 17:
-                left_panel.append(f"{BORDER_COLOR}├─ {GOLD}⚙ PHONOGRAPH {BORDER_COLOR}" + ("─" * (gear_w - 17)) + f"┤{RESET}")
-                
-                # Dynamic animated pressure gauge
-                press_val = int(70 + 25 * math.sin(time.time() * 2.0))
+
+            # Sub-panel for telemetry
+            if avail_h >= 16:
+                left_panel.append(f"{BORDER_COLOR}├─ {GOLD}⚙ PHONOGRAPH {BORDER_COLOR}" + ("─" * max(2, gear_w - 17)) + f"┤{RESET}")
+                press_val = int(72 + 24 * math.sin(time.time() * 2.2))
                 p_bar = "█" * (press_val // 10) + "░" * (10 - (press_val // 10))
                 
                 stats = [
@@ -841,47 +882,56 @@ class LinesApp:
                     (f"SPEED:   {EMERALD}120 RPM ⚙{RESET}" if self.status == "Playing" else f"SPEED:   {GOLD_MUTED}IDLE 0 RPM{RESET}"),
                     f"VALVES:  {GOLD}[{EMERALD}{p_bar}{GOLD}] {press_val}%{RESET}",
                     f"COGS:    {GOLD}8:6 DUAL MESH{RESET}",
-                    f"BARREL:  {EMERALD}BRASS CYLINDER{RESET}",
+                    f"STYLUS:  {EMERALD}SAPPHIRE 1.8g ❖{RESET}",
                 ]
                 for st in stats:
-                    pad = gear_w - visible_len(st) - 3
-                    left_panel.append(f"{BORDER_COLOR}│{RESET} {st}{' ' * max(0, pad)}{BORDER_COLOR}│{RESET}")
-                
-                # Fill remaining panel height before bottom border
+                    pad = max(0, gear_w - visible_len(st) - 3)
+                    left_panel.append(f"{BORDER_COLOR}│{RESET} {st}{' ' * pad}{BORDER_COLOR}│{RESET}")
+
                 while len(left_panel) < avail_h - 1:
                     left_panel.append(f"{BORDER_COLOR}│{' ' * (gear_w - 2)}│{RESET}")
                 left_panel.append(f"{BORDER_COLOR}╰" + ("─" * (gear_w - 2)) + f"╯{RESET}")
             else:
-                # Compact bottom border
                 speed_str = f" {EMERALD}RPM: 120 ⚙{RESET}" if self.status == "Playing" else f" {GOLD_MUTED}IDLE ⚙{RESET}"
-                pad = gear_w - visible_len(speed_str) - 3
-                left_panel.append(f"{BORDER_COLOR}│{RESET}{speed_str}{' ' * max(0, pad)} {BORDER_COLOR}│{RESET}")
+                pad = max(0, gear_w - visible_len(speed_str) - 3)
+                left_panel.append(f"{BORDER_COLOR}│{RESET}{speed_str}{' ' * pad} {BORDER_COLOR}│{RESET}")
                 left_panel.append(f"{BORDER_COLOR}╰" + ("─" * (gear_w - 2)) + f"╯{RESET}")
                 while len(left_panel) < avail_h:
                     left_panel.append(" " * gear_w)
 
-        # Render Main Frame Lines
+        # Assemble Main Frame Lines
         for row_i in range(avail_h):
             lyr = visible_lyrics_lines[row_i] if row_i < len(visible_lyrics_lines) else ""
-            
             if split_layout:
                 lp = left_panel[row_i] if row_i < len(left_panel) else (" " * gear_w)
-                pad_lp = gear_w - visible_len(lp)
-                line_out = lp + (" " * max(0, pad_lp)) + f" {BORDER_COLOR}│{RESET} " + lyr
-                buf.append(line_out)
+                pad_lp = max(0, gear_w - visible_len(lp))
+                line_out = lp + (" " * pad_lp) + f" {BORDER_COLOR}│{RESET} " + lyr
+                buf.append(truncate_visible(line_out, w))
             else:
-                buf.append(lyr)
+                buf.append(truncate_visible(lyr, w))
 
-        # 3. Footer Control Bar
+        # 3. Footer Control Bar (Strictly 2 separate elements, NO embedded newline)
+        buf.append(f"{BORDER_COLOR}" + ("━" * w) + f"{RESET}")
+        
         sync_tag = f"{EMERALD}LRC-SYNC{RESET}" if self.is_synced else f"{GOLD_MUTED}AUTO-SCROLL{RESET}"
         offset_tag = f" {GOLD}Offset: {self.manual_offset:+.1f}s{RESET}" if self.manual_offset != 0 else ""
-        controls = f" {BORDER_COLOR}[{RESET} {GOLD}[Space]{RESET} Play  {GOLD}[n/p]{RESET} Track  {GOLD}[k/j]{RESET} Offset  {GOLD}[e]{RESET} Edit  {GOLD}[v]{RESET} View  {GOLD}[g]{RESET} Gears  {GOLD}[q]{RESET} Quit {BORDER_COLOR}]{RESET}  {sync_tag}{offset_tag}"
-        space_ctrl = max(1, w - visible_len(controls) - 1)
-        footer = f"{BORDER_COLOR}━{RESET}" * w + f"\n{controls}{' ' * space_ctrl}"
-        buf.append(footer)
+        
+        if w >= 80:
+            controls = f" {BORDER_COLOR}[{RESET} {GOLD}[Space]{RESET} Play  {GOLD}[n/p]{RESET} Track  {GOLD}[b]{RESET} Steam  {GOLD}[k/j]{RESET} Offset  {GOLD}[e]{RESET} Edit  {GOLD}[v]{RESET} View  {GOLD}[g]{RESET} Gears  {GOLD}[q]{RESET} Quit {BORDER_COLOR}]{RESET}  {sync_tag}{offset_tag}"
+        else:
+            controls = f" {BORDER_COLOR}[{RESET} {GOLD}[Space]{RESET} {GOLD}[n/p]{RESET} {GOLD}[b]{RESET} {GOLD}[v]{RESET} {GOLD}[q]{RESET} {BORDER_COLOR}]{RESET} {sync_tag}"
+            
+        space_ctrl = max(1, w - visible_len(controls))
+        buf.append(f"{controls}{' ' * space_ctrl}")
 
-        # Single atomic write to stdout
-        sys.stdout.write("\033[H" + "\n".join(buf[:h]))
+        # 4. Atomic Terminal Output
+        # Strictly render at most (h - 1) rows so cursor NEVER hits the bottom-right corner and never scrolls!
+        max_rows = min(len(buf), h - 1)
+        out_lines = []
+        for line in buf[:max_rows]:
+            out_lines.append(truncate_visible(line, w) + "\033[K")
+
+        sys.stdout.write("\033[H" + "\r\n".join(out_lines))
         sys.stdout.flush()
 
     def run(self):
@@ -890,15 +940,14 @@ class LinesApp:
         try:
             while self.running:
                 now = time.time()
-                # Poll playerctl every 0.6s
-                if now - last_poll >= 0.6:
+                if now - last_poll >= 0.5:
                     self.poll_player()
                     self.check_song_change()
                     last_poll = now
 
                 self.handle_input()
                 self.render()
-                time.sleep(0.05) # ~20 FPS for silky gear animation
+                time.sleep(0.05)
         finally:
             self._restore_terminal()
 
@@ -907,12 +956,10 @@ def main():
         print(f"""
 {GOLD_BRIGHT}lines{RESET} - Стильный Steampunk Phonograph терминальный плеер текста песен
 
-{EMERALD}Использование:{RESET}
-  lines                 Запуск плеера в терминале
-
 {EMERALD}Управление:{RESET}
   [Space]               Воспроизведение / Пауза (playerctl)
   [n] / [p]             Следующий / Предыдущий трек
+  [b]                   Клапан сброса пара (Steam Blow-off Valve) 💨
   [k] / [j]             Сдвиг синхронизации текста (-1 сек / +1 сек)
   [0]                   Сброс сдвига синхронизации
   [e]                   Редактировать / добавить свой текст песни

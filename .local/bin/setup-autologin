@@ -1,0 +1,12 @@
+#!/bin/bash
+set -e
+echo "Configuring automatic login for user $USER on tty1..."
+sudo mkdir -p /etc/systemd/system/getty@tty1.service.d/
+sudo tee /etc/systemd/system/getty@tty1.service.d/autologin.conf << INI
+[Service]
+ExecStart=
+ExecStart=-/usr/bin/agetty --autologin $USER --noclear %I \$TERM
+Type=idle
+INI
+sudo systemctl daemon-reload
+echo "Done! At boot, system will automatically log into user $USER and start Niri immediately."

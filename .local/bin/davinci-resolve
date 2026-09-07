@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# DaVinci Resolve Launcher Wrapper
+export RESOLVE_DIR="/home/ym1co/.local/share/DaVinciResolve"
+export LD_LIBRARY_PATH="$RESOLVE_DIR/libs:$RESOLVE_DIR/bin:$LD_LIBRARY_PATH"
+export QT_QPA_PLATFORM=xcb
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export RESOLVE_SCRIPT_API="$RESOLVE_DIR/Developer/Scripting"
+export RESOLVE_SCRIPT_LIB="$RESOLVE_DIR/libs/Fusion/fusionscript.so"
+export PYTHONPATH="$PYTHONPATH:$RESOLVE_SCRIPT_API/Modules/"
+
+cd "$RESOLVE_DIR"
+"$RESOLVE_DIR/bin/resolve" "$@"
+EXIT_CODE=$?
+
+# Background cleanup after Resolve exits: keep only 2 latest MOV files
+/home/ym1co/.local/bin/davinci-clean --keep 2 > /dev/null 2>&1 &
+
+exit $EXIT_CODE

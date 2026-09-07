@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+
+echo "🚀 Установка рекомендованных системных пакетов для Niri Wayland..."
+sudo pacman -S --needed --noconfirm wl-clipboard mako polkit-gnome cliphist
+echo "✅ Готово! Пакеты установлены и готовы к работе."

@@ -1,0 +1,8 @@
+#!/bin/sh
+XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-~/.config}
+
+if [ -f "$XDG_CONFIG_HOME/vesktop-flags.conf" ]; then
+    VESKTOP_USER_FLAGS="$(grep -v '^#' "$XDG_CONFIG_HOME/vesktop-flags.conf")"
+fi
+
+exec /home/ym1co/.local/share/vesktop-app/vesktop $VESKTOP_USER_FLAGS "$@"

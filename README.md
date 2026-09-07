@@ -40,21 +40,32 @@ An exclusive CLI lyrics visualizer designed from scratch with rich terminal grap
   <img src="assets/lyrics_preview.png" alt="Lines Phonograph Preview" width="90%" />
 </div>
 
-### 2. `fetch` / `fastfetch-live` — Dynamic Real-Time Fetch
+### 2. `boiler` / `steam-gauge` — Imperial Steam Engine & Telemetry Plant
+Translates live Linux hardware sensors (CPU, RAM, GPU, Disk, Temps) into a functioning Victorian steam plant:
+- **Firebox Temperature & Manometer**: CPU Core temperature and load rendered as boiler steam pressure (`[ 3.4 BAR / 49.3 PSI ]`) with active safety valves.
+- **Hydraulic Water Reservoir**: System RAM represented as a mechanical H₂O tank (`[ H₂O TANK: 20GB / 32GB ]`).
+- **Dynamo & Flywheel**: GPU compute load mapped to a heavy brass dynamo with rotational flywheel RPM and wattage.
+- **Oscillating Steam Pistons**: Real-time animated ASCII dual-cylinder pistons operating in counter-phase.
+- **Interactive Gauges**: `[Space]` sounds the Imperial Steam Whistle (`💨 *TOOT TOOT*`), `[b]` engages the emergency blow-off valve, and `[c]` shovels coal into the firebox.
+
+### 3. `fetch` / `fastfetch-live` — Dynamic Real-Time Fetch
 - Replaces static fetch with a live, continuous updating dashboard.
 - Displays media metadata (`phono`), system uptime (`runtime`), package count (`cogs`), compositor (`gearbox`), and kernel (`boiler`).
 - Built-in hotkeys: `[Space]` Play/Pause, `[n]` Next track, `[p]` Previous track, `[q]` Exit.
 
-### 3. `fix-audio` — PipeWire / WirePlumber Recovery
+### 4. `fix-audio` — PipeWire / WirePlumber Recovery
 - Instant diagnostic and recovery tool for Wayland/PipeWire audio.
 - Automatically detects and re-assigns USB composite audio sinks/sources when devices drop or fail.
 
-### 4. `set-wallpaper` & `swaybg-wrapper`
+### 5. `set-wallpaper` & `swaybg-wrapper`
 - High-resolution 5K & 4K bespoke Steampunk artwork collection included in `wallpapers/`.
 - Hot-swapping between *Emerald Observatory*, *Clockwork Forest*, and *Sanctuary*.
 
-### 5. `set-rgb-theme`
-- Synchronizes your hardware RGB peripherals (via OpenRGB) to match the desktop theme (Direct Emerald `#78c45d`, Antique Gold `#dec07e`, or Dual Glow).
+### 6. Suite of Custom Tools
+- **`roblox-antiafk`**: Background non-intrusive anti-AFK agent using direct XSendEvent (never steals focus or workspace).
+- **`focus-mode`**: Anti-distraction / deep-work blocker for focus sessions.
+- **`set-rgb-theme`**: Synchronizes hardware RGB peripherals (via OpenRGB) to match Emerald & Gold.
+- **`davinci-*`**: Transcoder, cache cleaner (`davinci-clean`), and studio watcher for DaVinci Resolve.
 
 ---
 
@@ -84,6 +95,8 @@ An exclusive CLI lyrics visualizer designed from scratch with rich terminal grap
 | `Mod + L` | Open Steampunk Power Menu |
 | `Mod + N` | Launch Nautilus File Manager |
 | `Mod + M` | Launch YouTube Music |
+| `Mod + Y` | Open `lines` Grand Phonograph Lyrics Player |
+| `Mod + B` | Open `boiler` Imperial Steam Telemetry Dashboard |
 | `Mod + O` | Launch Obsidian Knowledge Vault |
 | `Mod + Shift + S` | Interactive Area Screenshot (saved to `~/Pictures/Screenshots`) |
 | `Print` | Fullscreen Screenshot |

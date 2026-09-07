@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# davinci-clean: Clean up temporary transcoded .mov files from ~/Videos/Replays
+
+REPLAY_DIR="$HOME/Videos/Replays"
+
+usage() {
+    echo "Использование: davinci-clean [--all | --keep <N> | --older-than-hours <H>]"
+    echo "  --all                 Удалить все временные .mov файлы (по умолчанию)"
+    echo "  --keep <N>            Оставить N самых свежих .mov файлов, удалить остальные"
+    echo "  --older-than-hours <H> Удалить .mov файлы старше H часов"
+    exit 0
+}
+
+MODE="all"
+KEEP_COUNT=0
+HOURS=0
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --all)
+            MODE="all"
+            shift
+            ;;
+        --keep)
+            MODE="keep"
+            KEEP_COUNT="$2"
+            shift 2
+            ;;
+        --older-than-hours)
+            MODE="older"
+            HOURS="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+shopt -s nullglob
+
+if [ "$MODE" = "all" ]; then
+    files=("$REPLAY_DIR"/*.mov)
+    if [ ${#files[@]} -eq 0 ]; then
+        echo "Нет временных файлов .mov для удаления."
+        notify-send -u low "DaVinci Cleaner" "Временных файлов .mov не обнаружено." 2>/dev/null || true
+        exit 0
+    fi
+    total_size=$(du -ch "${files[@]}" 2>/dev/null | tail -n1 | cut -f1)
+    count=${#files[@]}
+    rm -f "${files[@]}"
+    echo "Удалено $count временных MOV файлов ($total_size)."
+    notify-send -u normal "🧹 Очистка кэша DaVinci" "Удалено $count временных .mov файлов.\nОсвобождено: $total_size" 2>/dev/null || true
+
+elif [ "$MODE" = "keep" ]; then
+    # Sort files by modification time, newest first
+    mapfile -t files < <(find "$REPLAY_DIR" -maxdepth 1 -name "*.mov" -type f -printf "%T@ %p\n" | sort -nr | cut -d' ' -f2-)
+    total_files=${#files[@]}
+    if [ "$total_files" -le "$KEEP_COUNT" ]; then
+        echo "Всего файлов ($total_files) <= лимита сохранения ($KEEP_COUNT). Удаление не требуется."
+        exit 0
+    fi
+    to_delete=("${files[@]:$KEEP_COUNT}")
+    total_size=$(du -ch "${to_delete[@]}" 2>/dev/null | tail -n1 | cut -f1)
+    del_count=${#to_delete[@]}
+    rm -f "${to_delete[@]}"
+    echo "Оставлено свежих: $KEEP_COUNT. Удалено устаревших: $del_count ($total_size)."
+    notify-send -u normal "🧹 Очистка кэша DaVinci" "Удалено устаревших .mov: $del_count\nОсвобождено: $total_size" 2>/dev/null || true
+
+elif [ "$MODE" = "older" ]; then
+    # Find files modified more than H hours ago
+    mins=$((HOURS * 60))
+    mapfile -t to_delete < <(find "$REPLAY_DIR" -maxdepth 1 -name "*.mov" -type f -mmin "+$mins")
+    if [ ${#to_delete[@]} -eq 0 ]; then
+        echo "Нет .mov файлов старше $HOURS часов."
+        exit 0
+    fi
+    total_size=$(du -ch "${to_delete[@]}" 2>/dev/null | tail -n1 | cut -f1)
+    del_count=${#to_delete[@]}
+    rm -f "${to_delete[@]}"
+    echo "Удалено .mov файлов старше $HOURS ч: $del_count ($total_size)."
+    notify-send -u normal "🧹 Очистка кэша DaVinci" "Удалено старых .mov: $del_count ($total_size)" 2>/dev/null || true
+fi

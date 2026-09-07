@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+
+# Focus Mode - Anti-AI & Anti-Distraction Blocker
+# Blocks AI assistants and distracting sites to force textbook & pen-and-paper learning
+
+HOSTS_FILE="/etc/hosts"
+BLOCK_TAG="# --- FOCUS MODE BLOCKS ---"
+
+AI_DOMAINS=(
+    "chatgpt.com"
+    "chat.openai.com"
+    "openai.com"
+    "claude.ai"
+    "anthropic.com"
+    "gemini.google.com"
+    "bard.google.com"
+    "copilot.microsoft.com"
+    "deepseek.com"
+    "chat.deepseek.com"
+    "perplexity.ai"
+    "poe.com"
+    "phind.com"
+    "blackbox.ai"
+    "qwenlm.ai"
+    "grok.com"
+    "x.ai"
+    "wolframalpha.com"
+)
+
+SEARCH_DOMAINS=(
+    "www.google.com"
+    "google.com"
+    "yandex.ru"
+    "ya.ru"
+    "bing.com"
+    "duckduckgo.com"
+)
+
+show_help() {
+    echo "Usage: focus-mode [on | off | status]"
+    echo ""
+    echo "Commands:"
+    echo "  on      - Block all AI and distraction sites (hardcore textbook mode)"
+    echo "  off     - Unblock all sites"
+    echo "  status  - Show current focus mode status"
+}
+
+case "$1" in
+    on)
+        echo "🔒 Включаем Focus Mode (блокировка нейросетей)..."
+        # Remove existing blocks if any
+        sudo sed -i "/$BLOCK_TAG/,/$BLOCK_TAG/d" "$HOSTS_FILE"
+        
+        # Prepare block list
+        BLOCK_CONTENT="$BLOCK_TAG\n"
+        for domain in "${AI_DOMAINS[@]}"; do
+            BLOCK_CONTENT+="127.0.0.1 $domain\n"
+            BLOCK_CONTENT+="::1 $domain\n"
+        done
+        BLOCK_CONTENT+="$BLOCK_TAG"
+        
+        # Append to /etc/hosts
+        echo -e "$BLOCK_CONTENT" | sudo tee -a "$HOSTS_FILE" > /dev/null
+        echo "✅ Focus Mode ВКЛЮЧЕН! Нейросети заблокированы. Бери учебник и черновик!"
+        ;;
+    off)
+        echo "🔓 Выключаем Focus Mode..."
+        sudo sed -i "/$BLOCK_TAG/,/$BLOCK_TAG/d" "$HOSTS_FILE"
+        echo "✅ Focus Mode ВЫКЛЮЧЕН."
+        ;;
+    status)
+        if grep -q "$BLOCK_TAG" "$HOSTS_FILE"; then
+            echo "🔴 Focus Mode: АКТИВЕН (Нейросети заблокированы)"
+        else
+            echo "🟢 Focus Mode: НЕ АКТИВЕН (Доступ открыт)"
+        fi
+        ;;
+    *)
+        show_help
+        ;;
+esac
