@@ -17,6 +17,10 @@ case "$OPT" in
         IMG="$WALL_DIR/4k-emerald-clockwork-sanctuary-art.png"
         NAME="5K Стимпанк: Часовое Святилище в Каньоне (5504x3072)"
         ;;
+    4|"sylphiette"|"sylphie"|"katana")
+        IMG="$WALL_DIR/sylphiette-steampunk-katana.jpg"
+        NAME="4K Стимпанк: Сильфиетта Грейрат с Шестерёнчатой Катаной"
+        ;;
     *)
         if [ -f "$OPT" ]; then
             IMG="$OPT"
